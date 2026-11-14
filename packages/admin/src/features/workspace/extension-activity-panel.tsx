@@ -8,6 +8,7 @@ import { useTheme } from '@/shared/theme'
 import { readHostTheme } from '@/shared/theme/palette'
 import { useI18n } from '@/shared/i18n'
 import { Banner, MEDIA_ALLOW } from '@/features/editor/previews/extension-host'
+import { BackendPendingNotice, backendPending } from '@/features/editor/previews/extension-backend-gate'
 import { ExtensionMaskIcon } from '@/features/editor/previews/extension-icon'
 import { isClientFrame } from '@/features/editor/previews/extension-host-logic'
 import { extensionEntryUrl, getExtensionToken } from '@/features/editor/previews/extension-token'
@@ -47,9 +48,16 @@ export function ExtensionActivityPanel({ info }: { info: ExtensionInfo }) {
  * view's frame policy (onActivityFrame / onChatbarFrame); `insert` / `busy`
  * effects go to `onInsert` / `onBusy`, and `closeRequested` turning true posts
  * `close-request` (chat-bar panel only). Fills its parent; `compact` = the
- * small chat-bar panel.
+ * small chat-bar panel. An unconfirmed manifest `backend` loads nothing:
+ * the host's notice instead (extension-backend-gate.tsx); confirming it
+ * mounts the frame fresh.
  */
-export function ExtensionPageFrame({ info, title, onFrame, onInsert, onBusy, closeRequested = false, logTag, compact = false }: {
+export function ExtensionPageFrame(props: PageFrameProps) {
+  if (backendPending(props.info)) return <div className="flex h-full flex-col"><BackendPendingNotice info={props.info} compact={props.compact} /></div>
+  return <PageFrame {...props} />
+}
+
+interface PageFrameProps {
   info: ExtensionInfo
   /** iframe title. */
   title: string
@@ -60,7 +68,9 @@ export function ExtensionPageFrame({ info, title, onFrame, onInsert, onBusy, clo
   /** Console prefix: `[<logTag>] <id>: …`. */
   logTag: string
   compact?: boolean
-}) {
+}
+
+function PageFrame({ info, title, onFrame, onInsert, onBusy, closeRequested = false, logTag, compact = false }: PageFrameProps) {
   const { t, lang } = useI18n()
   const { theme } = useTheme()
   // Same DOM-change signal as extension-host.tsx: `theme` is when the palette

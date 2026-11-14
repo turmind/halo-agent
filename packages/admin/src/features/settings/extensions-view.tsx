@@ -31,6 +31,10 @@ import { newerStatus } from './update-status'
  * enforces it for every install path). An upload or update that lands an
  * unconfirmed one asks right away; cancelling leaves it installed with the
  * row's Confirm button. An update of an already-confirmed id doesn't ask.
+ * Until then none of its pages loads (extension-backend-gate.tsx). The row
+ * and the prompt say whether this server isolates it (`backend.isolation`),
+ * and a backend out of restarts shows its last failure (`backend.failed`;
+ * switching off and on retries).
  */
 export function ExtensionsView() {
   const { t } = useI18n()
@@ -55,14 +59,20 @@ export function ExtensionsView() {
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }
 
+  /** The confirm prompt, with how this server would run it (isolated or not). */
+  const confirmPrompt = (info: ExtensionInfo) => t('settings.extensions.confirmBackendPrompt', {
+    name: info.name,
+    isolation: info.backend?.isolation ? t(`settings.extensions.isolation.${info.backend.isolation}`) : '',
+  })
+
   /** After an upload / update: ask when it landed an unconfirmed backend. */
   async function offerConfirm(info: ExtensionInfo) {
     if (!info.backend || info.backend.confirmed) return
-    if (await confirmAction(t('settings.extensions.confirmBackendPrompt', { name: info.name }))) await api.extensions.confirmBackend(info.id)
+    if (await confirmAction(confirmPrompt(info))) await api.extensions.confirmBackend(info.id)
   }
 
   async function handleConfirmBackend(ext: ExtensionInfo) {
-    if (!(await confirmAction(t('settings.extensions.confirmBackendPrompt', { name: ext.name })))) return
+    if (!(await confirmAction(confirmPrompt(ext)))) return
     setBusy(true)
     setError(null)
     try {
@@ -221,8 +231,14 @@ export function ExtensionsView() {
                     </span>
                   )}
                   {ext.backend && (
-                    <span className="shrink-0 rounded border border-[var(--border)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
+                    <span
+                      className={cn('shrink-0 rounded border px-1.5 text-[10px]', !ext.backend.isolation || ext.backend.isolation === 'bwrap'
+                        ? 'border-[var(--border)] text-[var(--muted-foreground)]'
+                        : 'border-amber-500/40 text-amber-500')}
+                      title={ext.backend.isolation ? t(`settings.extensions.isolation.${ext.backend.isolation}`) : undefined}
+                    >
                       {t('settings.extensions.backend')}
+                      {ext.backend.isolation && ` · ${t(`settings.extensions.isolationShort.${ext.backend.isolation}`)}`}
                     </span>
                   )}
                   {!runsHere(ext) && (
@@ -248,6 +264,9 @@ export function ExtensionsView() {
                 )}
                 {ext.backend && !ext.backend.confirmed && (
                   <p className="mt-0.5 truncate text-[10px] text-amber-500">{t('settings.extensions.backendPending')}</p>
+                )}
+                {ext.backend?.failed && (
+                  <p className="mt-0.5 truncate text-[10px] text-red-400" title={ext.backend.failed}>{t('settings.extensions.backendFailed', { error: ext.backend.failed })}</p>
                 )}
                 {update && <UpdateLine entry={update} />}
               </div>

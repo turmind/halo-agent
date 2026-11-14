@@ -11,6 +11,7 @@ import { cn, confirmAction } from '@/shared/utils'
 import { FilePicker, type PickedFile } from '@/shared/components/file-picker'
 import { PreviewShell, ToolbarButton } from './ui/preview-shell'
 import { extensionEntryUrl, getExtensionToken } from './extension-token'
+import { BackendPendingNotice, backendPending } from './extension-backend-gate'
 import { currentPlatform, isImmersiveViewer } from './registry'
 import { ImmersivePane, claimImmersive, createExitPill, exitImmersive, takeFullscreenArm, takeRefocus } from '../immersive'
 import {
@@ -130,8 +131,21 @@ interface Props extends PreviewProps {
  * The extension never fetches the file itself; the host fetches and
  * transfers the bytes (§6). Protocol decisions live in extension-host-logic.ts;
  * this component only executes the effects it returns.
+ * An unconfirmed manifest `backend` loads nothing: the host's notice instead
+ * (extension-backend-gate.tsx); confirming it mounts the host fresh.
  */
-export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText, readOnly }: Props) {
+export function ExtensionHostPreview(props: Props) {
+  if (backendPending(props.info)) {
+    return (
+      <PreviewShell name={props.name} downloadUrl={props.downloadUrl} onOpenAsText={props.onOpenAsText}>
+        <div className="flex h-full flex-col"><BackendPendingNotice info={props.info} /></div>
+      </PreviewShell>
+    )
+  }
+  return <HostPreview {...props} />
+}
+
+function HostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText, readOnly }: Props) {
   const { t, lang } = useI18n()
   const useEditorStore = useScopedEditorStore()
   const { theme } = useTheme()

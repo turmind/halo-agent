@@ -9,6 +9,7 @@ import { useI18n } from '@/shared/i18n'
 import { useTheme } from '@/shared/theme'
 import { SecurityView } from './security-view'
 import { ExtensionsView } from './extensions-view'
+import { SETTINGS_SECTION_EVENT, takeSettingsSection } from './settings-nav'
 import { CoreUpdate } from './core-update'
 import { ModelsSync } from './models-sync'
 import { ProviderModels } from './provider-models'
@@ -41,7 +42,7 @@ export function SettingsMain() {
   const activeProject = useProjectStore((s) => s.activeProject)
   const [scope, setScope] = useState<'global' | 'workspace'>('global')
   const [schema, setSchema] = useState<Schema | null>(null)
-  const [activeNs, setActiveNs] = useState<string>('general')
+  const [activeNs, setActiveNs] = useState<string>(() => takeSettingsSection() ?? 'general')
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [version, setVersion] = useState<string | null>(null)
@@ -53,6 +54,13 @@ export function SettingsMain() {
   const [saveError, setSaveError] = useState<{ dotPath: string; message: string } | null>(null)
 
   const projectId = scope === 'workspace' ? activeProject?.path : undefined
+
+  // Already mounted when another view asks for a section (settings-nav.ts).
+  useEffect(() => {
+    const onSection = () => { const ns = takeSettingsSection(); if (ns) setActiveNs(ns) }
+    window.addEventListener(SETTINGS_SECTION_EVENT, onSection)
+    return () => window.removeEventListener(SETTINGS_SECTION_EVENT, onSection)
+  }, [])
 
   const refresh = useCallback(() => {
     setRefreshing(true)
