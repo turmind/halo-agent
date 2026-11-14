@@ -46,9 +46,10 @@
  * Write isolation (Linux with a working bwrap — the probe workspace sessions
  * use): the child runs under bwrap with the filesystem read-only except its
  * data dir, the socket dir and a private /tmp (tools/sandbox.ts
- * buildBackendBwrapArgs). Reads and network are not limited. Stopping then
- * signals bwrap, whose --die-with-parent SIGKILLs the backend — the same as
- * a crash, which a backend has to survive anyway. Linux without bwrap runs
+ * buildBackendBwrapArgs). Reads and network are not limited. bwrap doesn't
+ * forward SIGTERM, so the preload reports the node pid over IPC
+ * (`halo:pid`) and stop() signals that pid directly — the backend still gets
+ * a graceful SIGTERM; bwrap exits with it. Linux without bwrap runs
  * it unsandboxed with one warning, as a workspace session without a sandbox
  * runs at full; macOS / Windows never isolate.
  */
