@@ -71,7 +71,7 @@ VS Code-style highlight selection (no checkboxes):
 
 ### Right-click menu
 
-Items shown depend on the click target. With several items selected the menu offers only Delete; on the workspace root row only New File / New Folder / Open in Integrated Terminal / Reveal in File Manager / Download apply:
+Items shown depend on the click target. Right-clicking inside a multi-selection shows "N items selected" over two items, Download N items and Delete N items. These three labels follow the UI language (zh: 已选 / 下载 / 删除 N 项); the single-item menu is English only. On the workspace root row only New File / New Folder / Open in Integrated Terminal / Reveal in File Manager / Download apply:
 
 | Action | Shown when | API / behavior |
 |---|---|---|
@@ -79,7 +79,7 @@ Items shown depend on the click target. With several items selected the menu off
 | Open in Integrated Terminal | Always | Spawns a terminal at the target dir (or file's parent) |
 | Reveal in File Manager | Desktop app only | Opens the OS file manager (Finder / Explorer / Linux FM) at the target — a folder opens itself, a file is highlighted in its parent dir. Hidden in a plain browser (gated on the `window.haloReveal` IPC bridge exposed by the desktop preload) |
 | Open to the Side | File or bundle directory | Splits the editor and opens the file (or bundle) in the right pane |
-| Download | File, folder, workspace root | File: `GET /api/files/download?path=...`. Folder / root: estimate + confirm, then one streamed zip — see [Folder download](#folder-download) |
+| Download | File, folder, workspace root, multi-select | File: `GET /api/files/download?path=...`. Folder / root: estimate + confirm, then one streamed zip. Multi-select (files and folders mixed): the same confirm, one zip of the whole selection — see [Folder download](#folder-download) |
 | Rename | Single file/folder | `POST /api/files/rename` |
 | Delete | Single or multi-select | `DELETE /api/files?path=...` (with confirm) |
 | Open as Workspace | Folder only | Switches the active workspace to that folder, reusing the path-input switch flow (validate → persist → reload). Shown at the bottom of the menu |
@@ -87,7 +87,7 @@ Items shown depend on the click target. With several items selected the menu off
 The menu auto-clamps to the viewport, so right-clicking near the window edge does not clip the bottom items.
 
 ### Folder download
-Download on a folder (or the workspace root) zips it on the server while it streams — nothing is staged on disk or in memory (`GET /api/files/download-folder`, see [dev/api.md](../dev/api.md#files)).
+Download on a folder (or the workspace root), or Download N items on a multi-selection, zips it on the server while it streams — nothing is staged on disk or in memory (`GET /api/files/download-folder`, see [dev/api.md](../dev/api.md#files)).
 - Clicking Download first fetches an estimate (`estimate=1`, a walk without reading contents) and opens a confirm: `≈ <size> · <n> files`, what is excluded by default with counts (node_modules / .git by name, the rest as "other build/cache folders"), how many items are always excluded or skipped
 - Checkbox "Include node_modules, .git and other build/cache folders" (`include=excluded`) re-fetches the estimate when toggled
 - More than 200,000 files, or a scan longer than 10 s → the dialog shows the server's 413 message ("download a subfolder instead") and Download stays disabled
@@ -97,6 +97,13 @@ Download on a folder (or the workspace root) zips it on the server while it stre
 - **Names a zip can't hold** (containing `\`, or a top-level `C:`-style prefix) are skipped and listed as unreadable
 - **Symlinks**: folder links are never followed; a file link is included only when its target stays inside the workspace and is not excluded
 - When anything was left out, the zip carries `_halo-excluded.txt` at its root: excluded paths grouped by reason (a pruned folder is listed once, not its contents; capped at 1000 per reason plus a count), including unreadable files and skipped links
+- **Multi-selection** (Download N items): the dialog is titled "Download N items as zip"; the estimate, checkbox, 413 handling and every rule above apply. On top of that:
+  - Zip entries are relative to the selected items' nearest common folder. Items picked in one folder appear by name (`a.txt`, `sub/…`); `a/b/x.txt` + `a/c` share `a/` and appear as `b/x.txt`, `c/…`
+  - The zip is named `<common folder>-selection.zip`; when the common folder is the workspace root, the workspace dir name is used (`<workspace dir>-selection.zip`)
+  - An item inside another selected folder (or picked twice) is counted once
+  - The 200,000-file and 10 s limits count the whole selection
+  - A selected file or link is checked as it would be inside a folder: a selected `.env`, secret, Halo runtime path or unsafe name is left out, and so is a selected folder link (never followed, unlike a single-folder download through a link) or a file link leaving the workspace. All of these are listed in `_halo-excluded.txt` and counted in the estimate. A selected always-excluded folder (e.g. `.halo/sessions`) is left out the same way rather than failing the download. A selected default-excluded folder (e.g. `node_modules`) is included, since it was picked explicitly
+  - A selection whose download link would pass 8,000 characters sends no request: the dialog shows "Too many items selected — download the parent folder instead" and Download stays disabled
 
 ### Modification indicator
 Files with unsaved editor edits show a coloured dot in the tree (synced from `editorStore.modifiedPaths`).
