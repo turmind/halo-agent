@@ -30,10 +30,8 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── runs.db                        # Run ledger: (workspace, session_id) rows for server-driven runs in flight; steady state empty (running_sessions)
 │   ├── a2a.db                         # A2A: inbound tasks, push configs + outbox, outbound dispatches (see design/a2a.md)
 │   ├── extensions/<id>/               # Installed Canvas preview extensions (halo-extension.json + bundle)
-│   ├── extensions/.state.json         # Per-extension on / off switch, outside <id>/ so an update keeps it (see design/canvas-extensions.md)
-│   ├── stt-models/                    # On-device STT model files, downloaded on demand (see design/stt-local.md)
-│   │   ├── sense-voice-zh-en-ja-ko-yue-2024-07-17/   # model.int8.onnx + tokens.txt (in-progress downloads: <file>.part)
-│   │   └── silero-vad-v4/silero_vad.onnx
+│   ├── extensions/.state.json         # Per-extension on / off switch + backend confirmation, outside <id>/ so an update keeps them (see design/canvas-extensions.md)
+│   ├── extension-data/<id>/           # An extension backend's own data dir (HALO_EXT_DATA_DIR), kept across updates; the only place it may write under bwrap (see design/canvas-extensions.md#extension-backends). voice-input / htrans: models/ (~271 MB each, design/stt-local.md)
 │   ├── logs/                          # Runtime logs (server.log)
 │   │   ├── evo/                       # Per-evo-run wrapper logs
 │   │   └── cron/                      # Pre-2.2 cron cli-child stdout/stderr (in-process runs write none; 30-day retention)

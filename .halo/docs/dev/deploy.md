@@ -65,13 +65,13 @@ Measured on Halo 2.2.5, fresh Ubuntu 24.04 arm64 EC2 (t4g.nano 0.5 GB, t4g.micro
 | Server, idle | ≈ 160 MB (≈ 250 MB for a few seconds at startup) |
 | Server, typical use (admin, editor, terminal, two parallel sub-sessions) | ≈ 210 MB |
 | Each `halo` CLI call (`--version`, `server status`, the `server start -d` launcher) | ≈ 170 MB more while it runs |
-| Local speech-to-text (voice input, meeting recorder), once used | ≈ 400 MB more, resident until restart; ≈ 100 MB more with speaker labels ([stt-local.md](../design/stt-local.md#engine)) |
+| Local speech-to-text (voice input, meeting recorder extensions), while in use | ≈ 400 MB more in the extension's own backend process, ≈ 100–160 MB more with speaker labels; back to 0 five minutes after the last use (Halo ≥ 2.3.0 — before, it stayed in the server until restart). Each of the two extensions has its own process ([stt-local.md](../design/stt-local.md#engine)) |
 
 Agent `shell_exec` work (builds, scripts) comes on top of these.
 
 Since dependencies are bundled (after 2.2.6) these are upper bounds; the arm64 table hasn't been re-measured. Same method before / after on an x86_64 box: `npm install -g` peak 596 → 262 MB, server idle (5 min) 133 → 95 MB, a `halo --version` call 195 → 49 MB.
 
-- **1 GB (t4g.micro)**: the recommended minimum. Install and typical use passed with no swap and at least 390 MB still available. With local speech-to-text, add swap or use 2 GB.
+- **1 GB (t4g.micro)**: the recommended minimum. Install and typical use passed with no swap and at least 390 MB still available. With local speech-to-text, add swap or use 2 GB (it needs ≈ 400–570 MB only while dictating / recording, and gives it back when idle).
 - **0.5 GB (t4g.nano)**: only with a 1 GB swap file. Without it, `apt-get install nodejs` and `npm install -g` are OOM-killed, and an installed server is killed by any ~60 MB transient (a `halo` CLI call, the SSM agent's document worker). With swap everything ran at micro's speed, except the first page load / editor open after idle (+0.7–1 s). Fit for a single-user trial, not a deployment.
 - CPU is not the limit: idle is ≈ 0.03 % of one vCPU; startup costs 3–4 s of CPU once.
 

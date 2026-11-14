@@ -103,7 +103,7 @@ my-project/
 - **IDE 级管理台** —— 聊天 + Monaco 编辑器 + 文件树 + Git 面板 + 终端（xterm.js），一个浏览器标签页全搞定，四套主题可选。
 - **技能和 Agent 都是文件** —— 技能是按需注入的 Markdown，Agent 是一份人设加一个 `agent.yaml`。工作区级或全局，不用写代码。
 - **扩展** —— 来自 [halo-hub](https://github.com/turmind/halo-hub) 的查看器和小应用：3D 模型、draw.io、Excalidraw、Jupyter 笔记本、会议录音等。除了在编辑器里打开文件，扩展还能在左侧活动栏加一个页面（如 Halo City），或在聊天输入栏加一个按钮（如语音输入）。用 `/extension install <id>` 安装，或在 **Settings → Extensions** 上传 zip（[设计](.halo/docs/design/canvas-extensions.md)）。
-- **语音输入** —— `/extension install voice-input` 之后，聊天输入栏会多一个麦克风：点一下开始录，再点一下停止，文字插到光标处，永远不会自动发送。转写就在你自己的 Halo 服务器上跑（SenseVoice-Small + Silero VAD，基于 sherpa-onnx），支持普通话、英语、粤语、日语和韩语，普通话输出简体。音频不出你的服务器，也不调用任何云端 API；约 240 MB 的模型在安装或第一次使用时由服务器自动下载，只下一次；加载后常驻约 400 MB 内存，直到重启（[设计](.halo/docs/design/stt-local.md)）。
+- **语音输入** —— `/extension install voice-input` 之后，聊天输入栏会多一个麦克风：点一下开始录，再点一下停止，文字插到光标处，永远不会自动发送。转写就在你自己的 Halo 服务器上跑（SenseVoice-Small + Silero VAD，基于 sherpa-onnx，随扩展一起安装），支持普通话、英语、粤语、日语和韩语，普通话输出简体。音频不出你的服务器，也不调用任何云端 API。装好后要在 设置 → 扩展 里确认一次（它会在服务器上运行一个程序）；之后自动下载约 240 MB 的模型，只下一次；使用时占约 400 MB 内存，闲置 5 分钟后释放（[设计](.halo/docs/design/stt-local.md)）。
 - **可选的「脸」** —— 点聊天输入栏的 ✨，编辑器里会固定一张由粒子组成的脸（`.halo/canvas/self.html`）；Agent 在回复里用隐藏标记驱动它，配合回复拼出文字、展示图片、做出动作。默认关闭，打开才生效（[设计](.halo/docs/design/express-self.md)）。
 - **Cron 定时任务** —— 定时（循环或一次性）跑 Agent，产出自动分发到绑定的聊天渠道。
 - **访问级别** —— 每个会话 `full` / `workspace` / `readonly` 三级，由 OS 沙箱强制执行（Linux 用 bubblewrap，macOS 用 Seatbelt）；子 Agent 的权限永远不会超过父会话（[级别怎么定](.halo/docs/guide/delegation-and-access.md#5-access-levels)、[局限](#现状与局限)）。
