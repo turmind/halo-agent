@@ -75,7 +75,7 @@ Files: `packages/server/src/channels/wechat/`
 - `cdn.ts` — media CDN client (download + decrypt)
 - `media-store.ts` (in `channels/shared/`) — saves inbound media to the workspace. Shared with the web chat channel: WeChat uses `<workspace>/.halo/assets/weixin/inbound/<accountId>/<date>/` (the `weixin` path segment is kept for backward compatibility with already-saved assets — the code, routes and db all say `wechat`), web pasted images land in `<workspace>/.halo/assets/web/inbound/<date>/`. Both emit `[图片已保存: /abs/path]` markers that the UI turns into media chips.
 - `send-media.ts` — uploads and sends files/images out
-- `handler.ts` — long-poll main loop, routes messages to SessionManager + slash-command dispatch
+- `handler.ts` — long-poll main loop, routes messages to SessionManager + slash-command dispatch. `/qr` renders the invite PNG with `qrcode`, `import()`ed in that branch only, so the package never loads at startup
 - `event-adapter.ts` — LLM streaming events → WeChat whole-message send (buffer `final` stream text only, cut at `WECHAT_TEXT_LIMIT` via shared `splitText`, flush on complete, serialized send chain)
 
 ## SessionManager dependencies

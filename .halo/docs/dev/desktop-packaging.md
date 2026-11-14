@@ -158,11 +158,12 @@ dependency work. Three levers, in order of how often they help:
 **What's left (the ~70 s floor):** electron-builder itself — asar packing, dmg
 generation, and Gatekeeper scanning the ~350 MB of `extraResources`. Neither
 fast-staging nor `npmRebuild:false` touches that; it runs on every build.
-A further win would be de-duplicating `cli-runtime` (~137 MB) against
-`server-runtime` (~92 MB) — they share most deps (drizzle, better-sqlite3,
-aws-sdk; the Feishu SDK only sits in server-runtime's `node_modules`, the cli
-bundle carries it as `dist/feishu-sdk.cjs`) — but that needs the two trees to physically share
-files without breaking cli's standalone require paths; deferred.
+`cli-runtime` used to duplicate most of `server-runtime`'s deps (it was
+~137 MB); since the cli bundle inlines its pure-JS deps into `dist/` (see
+[deploy.md](deploy.md)), its `node_modules` holds only the native / sync-required
+externals (better-sqlite3, node-pty, sherpa-onnx-node, @parcel/watcher,
+@xterm/*) — not re-measured for the desktop stage. The Feishu SDK sits in
+server-runtime's `node_modules`; the cli bundle carries it as `dist/feishu-sdk.cjs`.
 
 ## Why `CI=true` is mandatory
 

@@ -92,6 +92,7 @@ Routes: `packages/server/src/routes/telegram.ts`
 
 1. User registers a bot via the API (provides token + workspace)
 2. Server calls `getMe` to validate; stores account; starts polling
+   - grammy is `import()`ed on the first account start (and by the validate route / cron dispatcher when they run), never at startup — a server with no enabled Telegram account never loads it. `startAccount` stays synchronous: the runner and reply route are set up at once, the `Bot` is built when the import resolves, and sends await it. A `Bot` that fails to build (bad token) is logged as `bot crashed`; a stop that lands before the import finishes means polling never starts.
 3. grammy's built-in long-polling handles reconnection / retries
 4. On graceful shutdown, `bot.stop()` is called for each active bot
 
