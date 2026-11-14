@@ -1,6 +1,6 @@
 {
   "name": "@turmind/halo-admin",
-  "version": "2.2.5",
+  "version": "2.2.6",
   "license": "MIT",
   "type": "module",
   "scripts": {
