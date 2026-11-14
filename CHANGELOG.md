@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.2.7] - 2026-11-14
+
 - Install: the npm package now carries its JavaScript dependencies inside `dist/`, and only the native modules (better-sqlite3, node-pty, sherpa-onnx-node, @parcel/watcher) plus the xterm terminal emulator are still installed by npm. `npm install -g @turmind/halo` installs 50 packages instead of 355, takes about 120 MB of disk instead of 286 MB (npm cache about 43 MB instead of 445 MB) and peaks at about 260 MB of memory instead of about 600 MB on our x86 test machine. Telegram, WeCom, the WeChat QR code and OpenTelemetry now load on first use, so an idle server uses about 95 MB instead of 133 MB, and `halo --version` starts in 0.03 s instead of 1 s. The download grows from about 8.1 MB to 10.5 MB. License texts of the bundled packages are in `dist/third-party-licenses.txt`. Channels, the CLI / TUI and the server behave as before. After upgrading, run `halo server restart` right away: until it restarts, a server still on the old version can fail with "Cannot find module" when it first sends an image to the model, connects a Telegram / WeCom / Feishu bot or shows a WeChat QR code; `halo upgrade` now says so.
 
 ## [2.2.6] - 2026-11-14
@@ -1287,7 +1289,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.6...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.7...HEAD
+[2.2.7]: https://github.com/turmind/halo-agent/compare/v2.2.6...v2.2.7
 [2.2.6]: https://github.com/turmind/halo-agent/compare/v2.2.5...v2.2.6
 [2.2.5]: https://github.com/turmind/halo-agent/compare/v2.2.4...v2.2.5
 [2.2.4]: https://github.com/turmind/halo-agent/compare/v2.2.3...v2.2.4
