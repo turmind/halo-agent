@@ -112,8 +112,12 @@ function fileEvent(fileName: string): FeishuMessageEvent {
 /** Push one event through the registered handler and wait for the async
  *  handleInbound (fire-and-forget in dispatchEvent) to queue the message. */
 async function fire(event: FeishuMessageEvent, stub: { messageQueue: Array<{ text: string }> }): Promise<void> {
-  const handler = larkState.handlers.get('im.message.receive_v1')
-  if (!handler) throw new Error('no im.message.receive_v1 handler registered')
+  // The handler registers once connect's import() of the SDK resolves.
+  const handler = await vi.waitFor(() => {
+    const h = larkState.handlers.get('im.message.receive_v1')
+    if (!h) throw new Error('no im.message.receive_v1 handler registered')
+    return h
+  })
   await handler(event)
   await vi.waitFor(() => { expect(stub.messageQueue).toHaveLength(1) })
 }

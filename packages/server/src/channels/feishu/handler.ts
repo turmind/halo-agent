@@ -19,7 +19,7 @@
  * mention-required in groups, event_id dedup, auto reconnect.
  */
 import path from 'node:path'
-import * as Lark from '@larksuiteoapi/node-sdk'
+import type * as Lark from '@larksuiteoapi/node-sdk'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
 import { listEnabledAccounts, getAccount, updateAccount } from './accounts.js'
@@ -370,14 +370,19 @@ export function startFeishuChannel(deps: {
     const state = ensureState(accountId)
     if (state.stopped || state.wsClient) return
 
-    const wsClient = new Lark.WSClient({
+    // SDK loaded on first connect, not at module top (see lark-sdk.ts). The
+    // await yields: a stopAccount or a second connect may land meanwhile.
+    const { WSClient, EventDispatcher, LoggerLevel } = await import('./lark-sdk.js')
+    if (state.stopped || state.wsClient) return
+
+    const wsClient = new WSClient({
       appId: account.appId,
       appSecret: account.appSecret,
-      loggerLevel: Lark.LoggerLevel.warn,
+      loggerLevel: LoggerLevel.warn,
     })
     state.wsClient = wsClient
 
-    const dispatcher = new Lark.EventDispatcher({})
+    const dispatcher = new EventDispatcher({})
     dispatcher.register({
       'im.message.receive_v1': async (data: unknown) => {
         dispatchEvent(accountId, data as FeishuMessageEvent)

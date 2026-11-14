@@ -14,7 +14,9 @@
  *   │   └── halo.js    ← `#!/usr/bin/env node` shim
  *   ├── dist/
  *   │   ├── index.js     ← esbuild bundle (cli + server + core)
- *   │   └── evo-wrapper.js ← evo wrapper entry, spawned by evolution/spawn.ts
+ *   │   ├── evo-wrapper.js ← evo wrapper entry, spawned by evolution/spawn.ts
+ *   │   ├── feishu-sdk.cjs ← Lark SDK + its deps, import()ed on first Feishu connect
+ *   │   └── feishu-sdk.licenses.txt ← license texts of the packages inside it
  *   ├── templates/       ← copied from packages/server/templates/
  *   ├── bundled-docs/    ← copied from .halo/docs/ (the user-facing subset)
  *   └── admin-out/       ← copied from packages/admin/out/
@@ -154,6 +156,27 @@ function readDepsList() {
 
 const { external: EXTERNAL, workspace: WORKSPACE_DEPS } = readDepsList()
 
+// The Feishu SDK is bundled into its own file instead of being an npm dep: the
+// installed package is 29 MB (17 MB of it `types/`) plus protobufjs / lodash.* /
+// qs, and loading it costs ~24 MB of heap. server's channels/feishu/lark-sdk.js
+// is the only module importing its values and handler.js `import()`s it on the
+// first connect; the main build rewrites that import to `./feishu-sdk.cjs`
+// (kept external, so it stays a runtime import) and a second build bundles
+// lark-sdk.js into that file. Inlining it would put the SDK source into
+// index.js and on the heap at startup again. CJS output: the SDK reads
+// `__dirname` and `require`s its deps, which an ESM output lacks.
+const LARK_SDK = '@larksuiteoapi/node-sdk'
+const FEISHU_SDK_SRC = path.join(SERVER_ROOT, 'dist', 'channels', 'feishu', 'lark-sdk.js')
+const FEISHU_SDK_OUT = './feishu-sdk.cjs'
+const MAIN_EXTERNAL = EXTERNAL.filter((n) => n !== LARK_SDK)
+const feishuSdkExternalPlugin = {
+  name: 'feishu-sdk-external',
+  setup(b) {
+    b.onResolve({ filter: /\/lark-sdk\.js$/ }, (args) =>
+      path.resolve(args.resolveDir, args.path) === FEISHU_SDK_SRC ? { path: FEISHU_SDK_OUT, external: true } : undefined)
+  },
+}
+
 // esbuild resolves each inlined `workspace:*` dep through its package.json
 // "main" (= dist/, the tsc output), NOT its TS source. So a stale or missing
 // dist means the bundle silently ships old code — this is exactly how an
@@ -220,7 +243,7 @@ const TIMEOUT_MS = 60_000
 // self-contained (no splitting), so `import.meta.url` in the wrapper is its own
 // file and its `argv[1] === import.meta.url` entry guard holds.
 const EVO_WRAPPER_SRC = path.join(SERVER_ROOT, 'dist', 'evolution', 'evo-wrapper.js')
-const buildPromise = build({
+const buildPromise = Promise.all([build({
   entryPoints: {
     index: path.join(CLI_ROOT, 'src', 'index.ts'),
     'evo-wrapper': EVO_WRAPPER_SRC,
@@ -230,15 +253,34 @@ const buildPromise = build({
   format: 'esm',
   target: 'node22',
   outdir: path.join(PUB_DIR, 'dist'),
-  external: EXTERNAL,
+  external: MAIN_EXTERNAL,
   define: {
     'process.env.HALO_VERSION': JSON.stringify(PKG_VERSION),
   },
-  plugins: [stubReactDevtoolsPlugin],
+  plugins: [stubReactDevtoolsPlugin, feishuSdkExternalPlugin],
   sourcemap: false,
   legalComments: 'none',
   logLevel: 'info',
-})
+  metafile: true,
+}), build({
+  // Third entry: dist/feishu-sdk.cjs (see LARK_SDK above). Deps the published
+  // package.json declares (ws) stay external; the SDK's own (axios, protobufjs,
+  // lodash.*, qs) are bundled. `module` first: the SDK's ESM build tree-shakes
+  // down to the three exports lark-sdk.js names, its CJS `main` doesn't.
+  entryPoints: { 'feishu-sdk': FEISHU_SDK_SRC },
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node22',
+  outdir: path.join(PUB_DIR, 'dist'),
+  outExtension: { '.js': '.cjs' },
+  external: MAIN_EXTERNAL,
+  mainFields: ['module', 'main'],
+  sourcemap: false,
+  legalComments: 'none',
+  logLevel: 'info',
+  metafile: true,
+})])
 
 const timer = setTimeout(() => {
   console.error('[build-bundle] esbuild hung for 60s — aborting')
@@ -246,14 +288,37 @@ const timer = setTimeout(() => {
 }, TIMEOUT_MS)
 timer.unref()
 
-await buildPromise
+const [mainResult, feishuSdkResult] = await buildPromise
 clearTimeout(timer)
 
 if (!fs.existsSync(path.join(PUB_DIR, 'dist', 'evo-wrapper.js'))) {
   console.error('[build-bundle] FATAL: dist/evo-wrapper.js missing — every evo run would fail with `Cannot find module` and time out.')
   process.exit(1)
 }
-console.log('[build-bundle] bundled dist/index.js + dist/evo-wrapper.js')
+// The SDK is no longer external, so if the lark-sdk.js rewrite ever stops
+// matching, esbuild silently inlines the whole SDK into index.js — back to
+// loading it on every start. Fail instead.
+const inlinedSdk = Object.keys(mainResult.metafile.inputs).filter((p) => p.includes(LARK_SDK) || p.endsWith('/lark-sdk.js'))
+if (inlinedSdk.length > 0) {
+  console.error(`[build-bundle] FATAL: the Feishu SDK got inlined into the main bundle (${inlinedSdk[0]}) — the lark-sdk.js → ${FEISHU_SDK_OUT} rewrite didn't match.`)
+  process.exit(1)
+}
+
+// The bundled packages' own LICENSE files no longer reach node_modules, and
+// several (protobufjs, qs) carry no in-source license comment for esbuild to
+// keep — ship their texts beside the bundle.
+const sdkPkgDirs = new Set()
+for (const p of Object.keys(feishuSdkResult.metafile.inputs)) {
+  const m = /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//.exec(p)
+  if (m) sdkPkgDirs.add(path.resolve(m[1]))
+}
+const licenseTexts = [...sdkPkgDirs].sort().map((dir) => {
+  const { name, version } = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
+  const file = fs.readdirSync(dir).find((f) => /^licen[cs]e/i.test(f))
+  return `${name}@${version}\n\n${file ? fs.readFileSync(path.join(dir, file), 'utf-8').trim() : '(no license file in package)'}\n`
+})
+fs.writeFileSync(path.join(PUB_DIR, 'dist', 'feishu-sdk.licenses.txt'), licenseTexts.join(`\n${'-'.repeat(72)}\n\n`), 'utf-8')
+console.log(`[build-bundle] bundled dist/index.js + dist/evo-wrapper.js + dist/feishu-sdk.cjs (${sdkPkgDirs.size} packages)`)
 
 // ── 2. bin shim ────────────────────────────────────────────────────────────
 // Silence two always-noise Node warnings that transitive deps trigger on
@@ -417,6 +482,7 @@ function mergeDeps(pkgs) {
   for (const pkg of pkgs) {
     for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {
       if (range.startsWith('workspace:')) continue   // skip workspace refs
+      if (name === LARK_SDK) continue                // bundled into dist/feishu-sdk.cjs
       out[name] = range
     }
   }
