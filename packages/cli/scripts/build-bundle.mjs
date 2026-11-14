@@ -176,6 +176,27 @@ const feishuSdkExternalPlugin = {
       path.resolve(args.resolveDir, args.path) === FEISHU_SDK_SRC ? { path: FEISHU_SDK_OUT, external: true } : undefined)
   },
 }
+// The SDK builds its User-Agent (`oapi-node-sdk/<version>`) from getSdkVersion(),
+// which reads `__dirname/../package.json` — absent once bundled, so it fell back
+// to `unknown`. Pin the version read from the SDK's own package.json at build
+// time, so it follows every SDK upgrade. Fail when the function moves rather
+// than silently shipping `unknown` again.
+let larkSdkVersionPinned = false
+const larkSdkVersionPlugin = {
+  name: 'lark-sdk-version',
+  setup(b) {
+    b.onLoad({ filter: /[\\/]@larksuiteoapi[\\/]node-sdk[\\/]es[\\/]index\.js$/ }, (args) => {
+      const pkg = JSON.parse(fs.readFileSync(path.join(path.dirname(args.path), '..', 'package.json'), 'utf-8'))
+      const src = fs.readFileSync(args.path, 'utf-8')
+      const head = 'function getSdkVersion() {'
+      if (pkg.name !== LARK_SDK || src.split(head).length !== 2) {
+        throw new Error(`${args.path}: getSdkVersion() not found once — re-check how the SDK reads its version`)
+      }
+      larkSdkVersionPinned = true
+      return { contents: src.replace(head, `${head}\n    return ${JSON.stringify(pkg.version)};`), loader: 'js' }
+    })
+  },
+}
 
 // esbuild resolves each inlined `workspace:*` dep through its package.json
 // "main" (= dist/, the tsc output), NOT its TS source. So a stale or missing
@@ -276,6 +297,7 @@ const buildPromise = Promise.all([build({
   outExtension: { '.js': '.cjs' },
   external: MAIN_EXTERNAL,
   mainFields: ['module', 'main'],
+  plugins: [larkSdkVersionPlugin],
   sourcemap: false,
   legalComments: 'none',
   logLevel: 'info',
@@ -301,6 +323,10 @@ if (!fs.existsSync(path.join(PUB_DIR, 'dist', 'evo-wrapper.js'))) {
 const inlinedSdk = Object.keys(mainResult.metafile.inputs).filter((p) => p.includes(LARK_SDK) || p.endsWith('/lark-sdk.js'))
 if (inlinedSdk.length > 0) {
   console.error(`[build-bundle] FATAL: the Feishu SDK got inlined into the main bundle (${inlinedSdk[0]}) — the lark-sdk.js → ${FEISHU_SDK_OUT} rewrite didn't match.`)
+  process.exit(1)
+}
+if (!larkSdkVersionPinned) {
+  console.error(`[build-bundle] FATAL: ${FEISHU_SDK_OUT} was built without the SDK's es/index.js — its User-Agent version pin never applied.`)
   process.exit(1)
 }
 
