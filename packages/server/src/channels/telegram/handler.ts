@@ -171,6 +171,8 @@ export function startTelegramChannel(deps: {
     // server with no enabled Telegram account never loads it. The rest of this
     // function stays synchronous as before (runner registered, reply route
     // restored); only building the Bot waits for the import, and sends await it.
+    // `new Bot('')` threw synchronously here before the lazy import; keep that.
+    if (!account.botToken) throw new Error('Empty token!')
     const ready = import('grammy').then(({ Bot, InputFile }) => ({ bot: new Bot(account.botToken), InputFile }))
     const bot = ready.then((r) => r.bot)
     const bridge: InboundBridge<TgRoute> = new InboundBridge({
@@ -210,6 +212,14 @@ export function startTelegramChannel(deps: {
     const promise = bot
       .then((b) => abort.signal.aborted ? undefined : runBot({ registry, db, account, bot: b, abort, bridge, activeOverrides, restartSelf }))
       .catch((err) => console.log(`[Telegram] account ${accountId} bot crashed: ${String(err)}`))
+    // A Bot that never got built (the import failed) leaves no runner behind, so
+    // the next start retries instead of reporting "already running" — as when
+    // the old synchronous `new Bot()` threw before runners.set.
+    bot.catch(() => {
+      if (runners.get(accountId)?.bot !== bot) return
+      runners.delete(accountId)
+      bridge.closeAll()
+    })
     runners.set(accountId, { accountId, bot, abort, promise, bridge, activeOverrides })
     console.log(`[Telegram] account ${accountId} started (@${account.botUsername}, workspace=${account.workspacePath})`)
   }

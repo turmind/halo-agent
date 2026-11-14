@@ -7,8 +7,8 @@
  *
  * Path resolution: the wrapper sits next to the module this code lands in —
  * `<server-dist>/evolution/evo-wrapper.js` beside `spawn.js` in a tsc build,
- * `dist/evo-wrapper.js` beside the single-file `dist/index.js` in the npm
- * bundle (build-bundle.mjs emits it as a second entry). We resolve via
+ * `dist/evo-wrapper.js` in the npm bundle's flat dist/, beside whichever chunk
+ * this code lands in (build-bundle.mjs emits it as a second entry). We resolve via
  * `import.meta.url` so either layout finds it.
  */
 import fs from 'node:fs'

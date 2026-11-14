@@ -535,13 +535,13 @@ function stripLocalDocs(root) {
 }
 
 // Stage the CLI runtime (halo tui / cli / setup / acp) as a self-contained
-// tree under resources/cli-runtime: the esbuild single-file bundle + its own
-// flat prod node_modules. It's deliberately separate from server-runtime —
-// the CLI is an in-process client (imports @turmind/halo-server modules, reads
-// ~/.halo directly, never starts the HTTP server or grabs server.lock), so
-// it can run alongside the desktop app's server. Isolating it costs ~38MB of
-// CLI-only deps (ink/react/marked/…) but keeps zero risk of perturbing the
-// server tree the Electron app boots.
+// tree under resources/cli-runtime: the esbuild code-split bundle (dist/) + its
+// own flat prod node_modules (the natives it keeps external). It's deliberately
+// separate from server-runtime — the CLI is an in-process client (imports
+// @turmind/halo-server modules, reads ~/.halo directly, never starts the HTTP
+// server or grabs server.lock), so it can run alongside the desktop app's
+// server. Isolating it costs a second copy of the bundle and the natives but
+// keeps zero risk of perturbing the server tree the Electron app boots.
 function stageCliRuntime() {
   // 1. Build the esbuild bundle + publishable layout (dist-dev/). build-bundle
   //    needs esbuild (a cli devDep) — this is why stageCliRuntime() runs before

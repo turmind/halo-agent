@@ -919,7 +919,10 @@ async function cmdUpgrade(): Promise<void> {
       process.exit(1)
     }
     process.stderr.write(
-      `\nUpgraded to ${latest}. Run \`halo server restart\` (or your service manager's restart) to pick up the new templates.\n`,
+      `\nUpgraded to ${latest}. Run \`halo server restart\` (or your service manager's restart) now.\n` +
+        `A server still running the old version loads parts of itself only when first used (image handling, ` +
+        `Telegram / WeCom / Feishu connects, WeChat QR login, …) and those files were just replaced — until it ` +
+        `restarts, such features can fail with "Cannot find module".\n`,
     )
     return
   }

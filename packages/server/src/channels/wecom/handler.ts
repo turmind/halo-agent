@@ -437,7 +437,11 @@ export function startWecomChannel(deps: {
     if (st.wsClient) return
     const account = getAccount(db, accountId)
     if (account && account.enabled === 1) restoreReplyRoute({ registry, db, account, bridge: st.bridge })
-    void connect(accountId)
+    // connect() awaits the SDK import; a failure there (or before the client
+    // exists) would otherwise only reach the process-wide unhandled-rejection log.
+    connect(accountId).catch((err) => {
+      console.warn(`[WeCom] ${accountId} connect failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
   }
 
   async function stopAccount(accountId: string): Promise<void> {

@@ -34,11 +34,12 @@ export function createTelegramRoutes(deps: { db: ChannelDb; channel: TelegramCha
     const bodyError = accountBodyError(body, CHAT_ACCESS_LEVELS)
     if (bodyError) return c.json({ error: bodyError }, 400)
 
-    // Validate token by calling getMe
+    // Validate token by calling getMe. grammy is loaded on use, not at module
+    // top (see channels/telegram/handler.ts); a failed import is a server
+    // fault, so it stays outside the try and surfaces as a 500, not a bad token.
+    const { Bot } = await import('grammy')
     let botUsername: string
     try {
-      // grammy loaded on use, not at module top (see channels/telegram/handler.ts).
-      const { Bot } = await import('grammy')
       const bot = new Bot(body.botToken)
       const me = await bot.api.getMe()
       botUsername = me.username

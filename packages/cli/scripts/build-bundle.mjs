@@ -34,6 +34,7 @@
  */
 import { build } from 'esbuild'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execSync, execFile } from 'node:child_process'
@@ -177,8 +178,9 @@ function pinOwnPackageJson({ pkgName, file, find, replace }) {
       setup(b) {
         b.onLoad({ filter: file }, (args) => {
           let dir = path.dirname(args.path)
-          while (!fs.existsSync(path.join(dir, 'package.json'))) dir = path.dirname(dir)
-          const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
+          while (!fs.existsSync(path.join(dir, 'package.json')) && path.dirname(dir) !== dir) dir = path.dirname(dir)
+          const pkgFile = path.join(dir, 'package.json')
+          const pkg = fs.existsSync(pkgFile) ? JSON.parse(fs.readFileSync(pkgFile, 'utf-8')) : {}
           const src = fs.readFileSync(args.path, 'utf-8')
           if (pkg.name !== pkgName || src.split(find).length !== 2) {
             throw new Error(`${args.path}: \`${find}\` not found once — re-check how ${pkgName} reads its package.json`)
@@ -205,6 +207,37 @@ const NAMES_PROBE = `import { pathToFileURL } from 'node:url'
 const ns = await import(pathToFileURL(process.argv[1]).href)
 process.stdout.write(JSON.stringify(Object.keys(ns)))
 process.exit(0)`
+// The export names Node's import() gives a file, in a child node process —
+// at most one per core at a time (~30 probes per build, each a full module load).
+const PROBE_CONCURRENCY = os.availableParallelism()
+const PROBE_TIMEOUT_MS = 30_000
+let probesRunning = 0
+const probeQueue = []
+function probeNames(abs) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      probesRunning++
+      execFileP(process.execPath, ['--input-type=module', '-e', NAMES_PROBE, abs], { timeout: PROBE_TIMEOUT_MS })
+        .then(({ stdout }) => resolve(JSON.parse(stdout)), reject)
+        .finally(() => { probesRunning--; probeQueue.shift()?.() })
+    }
+    if (probesRunning < PROBE_CONCURRENCY) run()
+    else probeQueue.push(run)
+  })
+}
+// Hang guard for the build below: abort when it makes no progress for 60s.
+// Re-armed as each probe settles, so a slow machine working through the probe
+// queue isn't taken for a hang; one probe is capped at 30s, well inside it.
+const HANG_TIMEOUT_MS = 60_000
+let hangTimer
+function armHangTimer() {
+  clearTimeout(hangTimer)
+  hangTimer = setTimeout(() => {
+    console.error(`[build-bundle] esbuild made no progress for ${HANG_TIMEOUT_MS / 1000}s — aborting`)
+    process.exit(2)
+  }, HANG_TIMEOUT_MS)
+  hangTimer.unref()
+}
 // Node's own rule: .cjs, or .js under a package.json without "type": "module".
 function isCommonJs(abs) {
   if (abs.endsWith('.cjs')) return true
@@ -217,12 +250,13 @@ function isCommonJs(abs) {
 }
 const cjsNamesCache = new Map()
 const cjsNames = (abs) => {
-  if (!cjsNamesCache.has(abs)) {
-    cjsNamesCache.set(abs, execFileP(process.execPath, ['--input-type=module', '-e', NAMES_PROBE, abs], { timeout: 30_000 })
-      .then(({ stdout }) => JSON.parse(stdout)))
-  }
+  if (!cjsNamesCache.has(abs)) cjsNamesCache.set(abs, probeNames(abs).finally(armHangTimer))
   return cjsNamesCache.get(abs)
 }
+// The wrapper's path is kept relative to the repo root: esbuild prints it into
+// the chunk (`// cjs-names:…` comment, `__esm` key), where an absolute path
+// would ship the build machine's directory layout.
+const CJS_NAMES_NS = 'cjs-names'
 const cjsDynamicImportPlugin = {
   name: 'cjs-dynamic-import-names',
   setup(b) {
@@ -230,17 +264,18 @@ const cjsDynamicImportPlugin = {
       if (args.kind !== 'dynamic-import' || args.pluginData?.cjsProbe) return undefined
       const r = await b.resolve(args.path, { kind: args.kind, importer: args.importer, resolveDir: args.resolveDir, pluginData: { cjsProbe: true } })
       if (r.errors.length > 0 || r.external || !r.path.includes(`${path.sep}node_modules${path.sep}`) || !isCommonJs(r.path)) return undefined
-      return { path: r.path, namespace: 'cjs-names', pluginData: await cjsNames(r.path) }
+      return { path: path.relative(REPO_ROOT, r.path), namespace: CJS_NAMES_NS, pluginData: await cjsNames(r.path) }
     })
-    b.onLoad({ filter: /.*/, namespace: 'cjs-names' }, (args) => {
+    b.onLoad({ filter: /.*/, namespace: CJS_NAMES_NS }, (args) => {
+      const abs = path.resolve(REPO_ROOT, args.path)
       const named = args.pluginData.filter((n) => n !== 'default')
       return {
         contents: [
-          `const m = require(${JSON.stringify(args.path)})`,
+          `const m = require(${JSON.stringify(abs)})`,
           'export default m',
           ...named.map((n, i) => `var n${i} = m[${JSON.stringify(n)}]; export { n${i} as ${JSON.stringify(n)} }`),
         ].join('\n'),
-        resolveDir: path.dirname(args.path),
+        resolveDir: path.dirname(abs),
         loader: 'js',
       }
     })
@@ -342,8 +377,6 @@ console.log(`[build-bundle] version: ${PKG_VERSION}${IS_RELEASE ? ' (release)' :
 // - `__dirname` is not defined: the CJS deps that read it either guard on
 //   `typeof __dirname` (@aws-sdk/util-user-agent-node) or only print it.
 // - No `process.env.NODE_ENV` define: react still picks its build at runtime.
-// Hard timeout — if esbuild hangs, abort within 60s rather than burn CPU.
-const TIMEOUT_MS = 60_000
 // Second entry: the evo wrapper. The server spawns it as its own process
 // (`node <dir of spawn.ts's code>/evo-wrapper.js`, evolution/spawn.ts), which
 // in the bundle means `dist/evo-wrapper.js` beside index.js. Without it every
@@ -375,7 +408,9 @@ const buildPromise = Promise.all([build({
   },
   plugins: [stubReactDevtoolsPlugin, feishuSdkExternalPlugin, inkPackagePin.plugin, cjsDynamicImportPlugin],
   sourcemap: false,
-  legalComments: 'none',
+  // The deps' in-source license comments, collected at the end of each output
+  // file (third-party-licenses.txt below covers the packages' license files).
+  legalComments: 'eof',
   logLevel: 'info',
   metafile: true,
 }), build({
@@ -393,19 +428,14 @@ const buildPromise = Promise.all([build({
   mainFields: ['module', 'main'],
   plugins: [larkSdkVersionPin.plugin],
   sourcemap: false,
-  legalComments: 'none',
+  legalComments: 'eof',
   logLevel: 'info',
   metafile: true,
 })])
 
-const timer = setTimeout(() => {
-  console.error('[build-bundle] esbuild hung for 60s — aborting')
-  process.exit(2)
-}, TIMEOUT_MS)
-timer.unref()
-
+armHangTimer()
 const [mainResult, feishuSdkResult] = await buildPromise
-clearTimeout(timer)
+clearTimeout(hangTimer)
 
 const fatal = (msg) => {
   console.error(`[build-bundle] FATAL: ${msg}`)
@@ -430,8 +460,10 @@ for (const [pin, what] of [[larkSdkVersionPin, `${FEISHU_SDK_OUT}'s User-Agent v
 // that needs them (TUI, a channel's first connect, an OTel endpoint, an image
 // tool call). A static import added anywhere on the startup path would make
 // esbuild hoist them into a chunk loaded on every start — invisible except on
-// the heap. Walk the static-import closure of the entry and the server chunk.
-const LAZY_DEPS = /^(@opentelemetry\/.*|@wecom\/aibot-node-sdk|grammy|@grammyjs\/.*|qrcode|ink|ink-spinner|react|react-dom|react-reconciler|marked|marked-terminal|jimp|@jimp\/.*)$/
+// the heap. Walk the static-import closure of each startup root: the two
+// entries, the server chunk (`halo server`) and the harness chunk (`halo cli`
+// / tui / agents / sessions).
+const LAZY_DEPS = /^(@opentelemetry\/.*|@wecom\/aibot-node-sdk|grammy|@grammyjs\/.*|qrcode|ink|ink-spinner|react|react-dom|react-reconciler|marked|marked-terminal|jimp|@jimp\/.*|undici)$/
 const pkgOf = (input) => /node_modules\/((?:@[^/]+\/)?[^/]+)\/(?!.*node_modules\/)/.exec(input)?.[1]
 function staticClosure(key) {
   const seen = new Set()
@@ -444,10 +476,12 @@ function staticClosure(key) {
   }
   return seen
 }
-const SERVER_ENTRY_SRC = path.join(SERVER_ROOT, 'dist', 'index.js')
+const chunkOf = (src) => outputKey((k) => mainOutputs[k].entryPoint && path.resolve(mainOutputs[k].entryPoint) === src)
 const startupRoots = [
   ['index.js', outputKey((k) => path.resolve(k) === path.join(DIST_DIR, 'index.js'))],
-  ['the server chunk', outputKey((k) => mainOutputs[k].entryPoint && path.resolve(mainOutputs[k].entryPoint) === SERVER_ENTRY_SRC)],
+  ['evo-wrapper.js', evoKey],
+  ['the server chunk', chunkOf(path.join(SERVER_ROOT, 'dist', 'index.js'))],
+  ['the harness chunk', chunkOf(path.join(CLI_ROOT, 'src', 'harness.ts'))],
 ]
 for (const [label, root] of startupRoots) {
   if (!root) fatal(`no output for ${label} in the metafile — the lazy-load gate can't run.`)
@@ -461,21 +495,70 @@ for (const [label, root] of startupRoots) {
   if (hoisted.size > 0) fatal(`${[...hoisted].sort().join(', ')} statically reachable from ${label} — some startup-path module imports them without import().`)
 }
 
+// Export-names gate: every `import()` of a dep must yield the names Node's own
+// import() gives the original file — the bug class cjsDynamicImportPlugin
+// fixes, checked on the output rather than trusted. The chunk side is the
+// metafile's `exports` (exactly what an ESM chunk's namespace holds); our own
+// sources are tsc-checked and skipped. ink's devtools.js can't load unbundled
+// (it needs the uninstalled react-devtools-core, stubbed above), so it has no
+// reference to compare against.
+const UNLOADABLE_UNBUNDLED = /[\\/]ink[\\/]build[\\/]devtools\.js$/
+const dynTargets = new Set()
+for (const input of Object.values(mainResult.metafile.inputs)) {
+  for (const i of input.imports) if (i.kind === 'dynamic-import' && !i.external) dynTargets.add(i.path)
+}
+const nameDiffs = await Promise.all([...dynTargets].map(async (target) => {
+  const abs = target.startsWith(`${CJS_NAMES_NS}:`) ? path.resolve(REPO_ROOT, target.slice(CJS_NAMES_NS.length + 1)) : path.resolve(target)
+  if (!abs.includes(`${path.sep}node_modules${path.sep}`) || UNLOADABLE_UNBUNDLED.test(abs)) return undefined
+  const chunk = outputKey((k) => mainOutputs[k].entryPoint === target)
+  if (!chunk) return `${target}: no chunk in the metafile`
+  const want = await (cjsNamesCache.get(abs) ?? probeNames(abs)).catch((err) => fatal(`can't load ${abs} unbundled to read its export names: ${String(err).split('\n')[0]}`))
+  const got = mainOutputs[chunk].exports
+  const missing = want.filter((n) => !got.includes(n))
+  const extra = got.filter((n) => !want.includes(n))
+  if (missing.length + extra.length === 0) return null
+  return `${path.relative(REPO_ROOT, abs)} → ${path.basename(chunk)}: missing [${missing.join(', ')}], extra [${extra.join(', ')}]`
+}))
+const nameErrors = nameDiffs.filter(Boolean)
+if (nameErrors.length > 0) fatal(`import() of a bundled dep yields other export names than Node gives the original:\n  ${nameErrors.join('\n  ')}`)
+console.log(`[build-bundle] export-names gate: ${nameDiffs.filter((d) => d === null).length} dep import() targets match Node's names`)
+
 // The bundled packages' own LICENSE / NOTICE files no longer reach
 // node_modules, and many carry no in-source license comment for esbuild to
-// keep — ship their texts beside the bundle.
+// keep — ship their texts beside the bundle. A package that ships no license
+// file (14 at 2.2.7: drizzle-orm, simple-git, agent-base, …) gets the standard
+// SPDX text of its package.json license (scripts/licenses/) under a copyright
+// line naming its package.json author, or its repository when there is none.
+// MIT's text carries the copyright line (its `<year>` dropped — unknown);
+// Apache-2.0's has none outside its how-to-apply appendix, so one is prepended.
+const LICENSE_TEMPLATES_DIR = path.join(__dirname, 'licenses')
+const MIT_HOLDER = '<copyright holders>'
+function standardLicenseText(pkg) {
+  const template = path.join(LICENSE_TEMPLATES_DIR, `${pkg.license}.txt`)
+  if (typeof pkg.license !== 'string' || !fs.existsSync(template)) {
+    fatal(`${pkg.name}@${pkg.version} ships no license file and its license ${JSON.stringify(pkg.license)} has no template in scripts/licenses/ — add one.`)
+  }
+  const person = (p) => typeof p === 'string' ? p : p?.name
+  const repo = typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url
+  const holder = person(pkg.author) || person(pkg.contributors?.[0]) || (repo && `the ${pkg.name} authors (${repo})`)
+  if (!holder) fatal(`${pkg.name}@${pkg.version} ships no license file and names no author or repository to credit.`)
+  const text = fs.readFileSync(template, 'utf-8').trim()
+  const licensed = text.includes(MIT_HOLDER) ? text.replace(MIT_HOLDER, holder) : `Copyright ${holder}\n\n${text}`
+  return `(no license file in package; standard ${pkg.license} text for the license its package.json declares)\n\n${licensed}`
+}
 const bundledPkgDirs = new Set()
 for (const p of [...Object.keys(mainResult.metafile.inputs), ...Object.keys(feishuSdkResult.metafile.inputs)]) {
-  if (p.startsWith('cjs-names:')) continue // wrapper of a file input listed on its own
+  if (p.startsWith(`${CJS_NAMES_NS}:`)) continue // wrapper of a file input listed on its own
   const m = /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\/(?!.*node_modules\/)/.exec(p)
   if (m) bundledPkgDirs.add(path.resolve(m[1]))
 }
 const licenseTexts = [...bundledPkgDirs].map((dir) => {
-  const { name, version, license } = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
+  const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
+  const { name, version } = pkg
   const files = fs.readdirSync(dir).filter((f) => /^(licen[cs]e|notice|copying|copyrightnotice)/i.test(f)).sort()
   const body = files.length > 0
     ? files.map((f) => fs.readFileSync(path.join(dir, f), 'utf-8').trim()).join('\n\n')
-    : `(no license file in package; package.json license: ${typeof license === 'string' ? license : JSON.stringify(license)})`
+    : standardLicenseText(pkg)
   return { id: `${name}@${version}`, text: `${name}@${version}\n\n${body}\n` }
 }).sort((a, b) => a.id.localeCompare(b.id))
 fs.writeFileSync(path.join(DIST_DIR, 'third-party-licenses.txt'), licenseTexts.map((l) => l.text).join(`\n${'-'.repeat(72)}\n\n`), 'utf-8')
