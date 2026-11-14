@@ -9,7 +9,7 @@ File: `packages/server/src/ws/handler.ts`
 - Endpoint: `ws://localhost:9527/ws`
 - Auth: `verifyClient` callback validates the JWT cookie
 - All messages are JSON-encoded
-- Compression: permessage-deflate (`perMessageDeflate: { zlibDeflateOptions: { level: 1 }, threshold: 1024 }` in `index.ts`) — frames ≥ 1 KB are compressed when the client offers the extension (browsers do), so a multi-MB subscribe snapshot ships ~4× smaller; stream deltas stay raw. Context takeover is on (~300 KB of zlib state per connection, allocated on the first compressed frame). Only the admin `/ws` server; the node / transcribe / stt / jupyter upgrade routes don't compress
+- Compression: permessage-deflate (`perMessageDeflate: { zlibDeflateOptions: { level: 1 }, threshold: 1024 }` in `index.ts`) — frames ≥ 1 KB are compressed when the client offers the extension (browsers do), so a multi-MB subscribe snapshot ships ~4× smaller; stream deltas stay raw. Context takeover is on (~300 KB of zlib state per connection, allocated on the first compressed frame). Only the admin `/ws` server; the node / transcribe / jupyter / extension-backend (`/api/ext/<id>/*`) upgrade routes don't compress
 
 ### Server-side keepalive
 
