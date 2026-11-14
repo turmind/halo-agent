@@ -378,6 +378,48 @@ describe('POST /api/extensions/:id/confirm-backend', () => {
   })
 })
 
+// Review-2 #1: until its backend is confirmed an extension serves only the
+// icons its manifest declares — its HTML / JS never reach a browser, however
+// the URL was built (the admin doesn't load it; this is the server's half).
+describe('static assets of an unconfirmed backend extension', () => {
+  const files = {
+    'halo-extension.json': JSON.stringify({ ...manifest, extensions: [], backend: { entry: 'backend/main.cjs' }, activity: { icon: 'icons/a.svg' }, chatbar: { icon: 'c.png' } }),
+    'index.html': '<html>glb</html>',
+    'app.js': 'console.log(1)',
+    'icons/a.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    'c.png': Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    'backend/main.cjs': '',
+  }
+  beforeEach(async () => { expect((await upload(app, await zipOf(files), cookie)).status).toBe(200) })
+
+  it('403 backend-unconfirmed for its HTML, JS and backend code; 200 for the declared icons', async () => {
+    for (const rest of ['index.html', 'app.js', 'backend/main.cjs', 'halo-extension.json']) {
+      const res = await asset('glb', '1.0.0', rest)
+      expect(res.status, rest).toBe(403)
+      expect(await res.json()).toMatchObject({ code: 'backend-unconfirmed' })
+    }
+    const a = await asset('glb', '1.0.0', 'icons/a.svg')
+    expect(a.status).toBe(200)
+    expect(a.headers.get('content-type')).toBe('image/svg+xml')
+    expect((await asset('glb', '1.0.0', 'c.png')).status).toBe(200)
+    // still the normal checks first: wrong version / bad token
+    expect((await asset('glb', '9.9.9', 'index.html')).status).toBe(404)
+    expect((await asset('glb', '1.0.0', 'index.html', 'garbage')).status).toBe(401)
+  })
+
+  it('serves everything once confirmed', async () => {
+    expect((await app.request('/api/extensions/glb/confirm-backend', { method: 'POST', headers: { Cookie: cookie } })).status).toBe(200)
+    const html = await asset('glb', '1.0.0', 'index.html')
+    expect(html.status).toBe(200)
+    expect(await html.text()).toBe('<html>glb</html>')
+    expect((await asset('glb', '1.0.0', 'app.js')).status).toBe(200)
+    // confirming started it once (warm-up); the next test's beforeEach removes it
+    const { extensionBackends } = await import('../src/extensions/backend.js')
+    expect((await app.request('/api/extensions/glb', { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(200)
+    expect(extensionBackends.list()).toEqual([])
+  })
+})
+
 describe('GET /api/extensions/:id/:version/:token/*  (static assets)', () => {
   const wasm = Buffer.from([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0])
   beforeEach(async () => {

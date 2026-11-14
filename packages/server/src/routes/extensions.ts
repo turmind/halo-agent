@@ -32,6 +32,14 @@
  * install path. They do call rescanAndBroadcast() so the response and the
  * very next GET already reflect the change without waiting for the debounce.
  *
+ * An extension whose manifest `backend` is not confirmed serves only its
+ * declared icons (`activity.icon`, `chatbar.icon` — CSS masks in the bars,
+ * no script); everything else is 403 `backend-unconfirmed`. The admin
+ * doesn't load its pages until then either (extension-backend-gate.tsx), but
+ * this is the boundary: with a token any URL here could be opened by hand,
+ * and its HTML would run same-origin with the admin cookie and could confirm
+ * itself.
+ *
  * A switched-off extension still serves its assets (the version check is
  * against the installed one, on or off): a dirty tab kept alive on it holds an
  * already-loaded iframe that may still lazy-load more of them (dynamic chunks,
@@ -103,12 +111,14 @@ export function assetMime(fileName: string): string {
  * dot-prefixed segment, or the target isn't a regular file. Hono URL-decodes
  * the param, so `rest` can arrive as `../../x` — the segment check runs
  * BEFORE any path.join, and a realpath prefix check guards symlinks.
- * Switched off still serves (see the header).
+ * Switched off still serves (see the header); an unconfirmed backend only
+ * its declared icons → 'unconfirmed'.
  */
-export function resolveAsset(id: string, version: string, rest: string): string | null {
+export function resolveAsset(id: string, version: string, rest: string): string | 'unconfirmed' | null {
   if (!isExtensionId(id)) return null
   const info = getInstalledExtension(id)
   if (!info || info.version !== version) return null
+  if (info.backend && !info.backend.confirmed && rest !== info.activity?.icon && rest !== info.chatbar?.icon) return 'unconfirmed'
   const segments = rest.split('/')
   if (segments.some((s) => s === '' || s === '.' || s === '..' || s.startsWith('.') || s.includes('\\'))) return null
   let dir: string
@@ -294,6 +304,7 @@ export function createExtensionRoutes() {
     if (!verifyScopedToken(c.req.param('token'), EXT_TOKEN_SCOPE)) return c.json({ error: 'Unauthorized' }, 401)
     const abs = resolveAsset(c.req.param('id'), c.req.param('version'), c.req.param('rest'))
     if (!abs) return c.json({ error: 'Not found' }, 404)
+    if (abs === 'unconfirmed') return c.json({ error: 'the backend of this extension is not confirmed — confirm it in Settings → Extensions', code: 'backend-unconfirmed' }, 403)
     const stat = fs.statSync(abs)
     const nodeStream = fs.createReadStream(abs)
     c.req.raw.signal?.addEventListener('abort', () => nodeStream.destroy(), { once: true })
