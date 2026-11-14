@@ -40,6 +40,15 @@
  *                      next start
  * stdout / stderr lines land in the server log as `[ExtBackend:<id>] …`.
  * The env is otherwise cleanChildEnv() (same as jupyter / evo children).
+ *
+ * Write isolation (Linux with a working bwrap — the probe workspace sessions
+ * use): the child runs under bwrap with the filesystem read-only except its
+ * data dir, the socket dir and a private /tmp (tools/sandbox.ts
+ * buildBackendBwrapArgs). Reads and network are not limited. Stopping then
+ * signals bwrap, whose --die-with-parent SIGKILLs the backend — the same as
+ * a crash, which a backend has to survive anyway. Linux without bwrap runs
+ * it unsandboxed with one warning, as a workspace session without a sandbox
+ * runs at full; macOS / Windows never isolate.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -52,6 +61,7 @@ import { getServerParam, getServerSecret } from '../config.js'
 import { globalExtensionDataDir } from '../paths.js'
 import { extensionsRoot, getExtension } from './registry.js'
 import { confirmedBackendIds } from './state.js'
+import { buildBackendBwrapArgs, describeSandboxUnavailable, getSandboxBackend } from '../tools/sandbox.js'
 
 /** No request and no open WS for this long → the process is stopped. */
 export const BACKEND_IDLE_MS = 5 * 60_000
@@ -62,9 +72,11 @@ const KILL_GRACE_MS = 5_000
 /** Kept for the start-failure message. */
 const STDERR_TAIL_LINES = 20
 
-/** `--import` preload: exit with the parent. Without it a backend outlives a
- *  SIGKILLed server (its listening socket keeps the event loop alive). */
-const EXIT_ON_DISCONNECT = "data:text/javascript,process.on('disconnect',()=>process.exit(0))"
+/** `--import` preload: exit with the parent (without it a backend outlives a
+ *  SIGKILLed server — its listening socket keeps the event loop alive), and
+ *  report the backend's own pid: under bwrap `child` is bwrap, which doesn't
+ *  forward SIGTERM, so stop() signals this pid to keep the graceful exit. */
+const PRELOAD = "data:text/javascript,process.on('disconnect',()=>process.exit(0));process.send({type:'halo:pid',pid:process.pid})"
 
 export interface RunningBackend {
   id: string
@@ -77,6 +89,8 @@ interface Backend extends RunningBackend {
   /** `version#installedAt` of the extension it was started from. */
   key: string
   child: ChildProcess
+  /** The node process itself (preload's `halo:pid`); = child.pid without bwrap. */
+  nodePid: number | undefined
   ready: Promise<void>
   active: number
   idleTimer: ReturnType<typeof setTimeout> | null
@@ -110,6 +124,19 @@ export class BackendUnconfirmedError extends Error {
   constructor(id: string) {
     super(`the backend of extension ${id} is not confirmed — confirm it in Settings → Extensions`)
   }
+}
+
+let warnedUnsandboxed = false
+
+/** `[cmd, args]` for the backend: under bwrap where it works (Linux). */
+function backendCommand(nodeArgs: string[], writableDirs: string[], cwd: string): [string, string[]] {
+  if (getSandboxBackend() === 'bwrap') return ['bwrap', [...buildBackendBwrapArgs(writableDirs, cwd), '--', process.execPath, ...nodeArgs]]
+  if (process.platform === 'linux' && !warnedUnsandboxed) {
+    warnedUnsandboxed = true
+    const d = describeSandboxUnavailable()
+    console.warn(`[ExtBackend] no OS sandbox${d ? ` (${d.reason})` : ''} — extension backends run without write isolation${d ? `. Fix: ${d.fix}` : ''}`)
+  }
+  return [process.execPath, nodeArgs]
 }
 
 const keyOf = (ext: ExtensionInfo) => `${ext.version}#${ext.installedAt}`
@@ -146,7 +173,7 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
     if (b.idleTimer) clearTimeout(b.idleTimer)
     if (running.get(b.id) === b) running.delete(b.id)
     console.log(`[ExtBackend] ${b.id}: stopping (${why}) pid=${b.pid}`)
-    b.child.kill('SIGTERM')
+    try { process.kill(b.nodePid ?? b.pid!, 'SIGTERM') } catch { b.child.kill('SIGTERM') }
     const force = setTimeout(() => { if (!b.dead) b.child.kill('SIGKILL') }, KILL_GRACE_MS)
     force.unref()
     void b.exited.then(() => clearTimeout(force))
@@ -159,7 +186,8 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
     fs.mkdirSync(dataDir, { recursive: true })
     const socket = nextSocket()
     try { fs.rmSync(socket, { force: true }) } catch { /* named pipe / nothing there */ }
-    const child = spawn(process.execPath, ['--import', EXIT_ON_DISCONNECT, entry], {
+    const [cmd, args] = backendCommand(['--import', PRELOAD, entry], [dataDir, path.dirname(socket)], dir)
+    const child = spawn(cmd, args, {
       cwd: dir,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: {
@@ -184,7 +212,7 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
     let exitCb: () => void
     const exited = new Promise<void>((r) => { exitCb = r })
     const b: Backend = {
-      id: ext.id, socket, pid: child.pid, key: keyOf(ext), child,
+      id: ext.id, socket, pid: child.pid, key: keyOf(ext), child, nodePid: undefined,
       ready: Promise.resolve(), active: 0, idleTimer: null, exited, stopping: false, dead: false,
     }
     b.ready = new Promise<void>((resolve, reject) => {
@@ -193,7 +221,9 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
         stop(b, 'start timed out')
       }, readyTimeoutMs)
       child.on('message', (m) => {
-        if ((m as { type?: unknown } | null)?.type !== 'ready') return
+        const msg = m as { type?: unknown; pid?: unknown } | null
+        if (msg?.type === 'halo:pid' && typeof msg.pid === 'number') b.nodePid = msg.pid
+        if (msg?.type !== 'ready') return
         clearTimeout(timer)
         console.log(`[ExtBackend] ${ext.id}: ready in ${Date.now() - t0}ms pid=${child.pid}`)
         resolve()
@@ -217,7 +247,7 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
     // Rejections reach callers through acquire(); this one only stops an
     // unhandled-rejection warning when nobody is waiting.
     b.ready.catch(() => {})
-    console.log(`[ExtBackend] ${ext.id}: starting pid=${child.pid}`)
+    console.log(`[ExtBackend] ${ext.id}: starting pid=${child.pid}${cmd === 'bwrap' ? ' (bwrap: writes limited to its data dir)' : ''}`)
     return b
   }
 

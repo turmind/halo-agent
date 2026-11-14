@@ -595,6 +595,20 @@ export function buildBwrapArgs(opts: SandboxOptions): string[] {
   return args
 }
 
+/** bwrap argv (before `--`) for an extension backend (extensions/backend.ts):
+ * write isolation only. The whole filesystem read-only, a private /tmp
+ * (TMPDIR points there), `writableDirs` bound read-write (its data dir, the
+ * dir its socket lives in) and `cwd` — the extension directory — bound again
+ * read-only in case it sits under /tmp. Reads, network and the env stay what
+ * an unsandboxed backend gets: no hidden lists, no --clearenv (the server
+ * already hands it cleanChildEnv()). Exported for tests, like buildBwrapArgs. */
+export function buildBackendBwrapArgs(writableDirs: string[], cwd: string): string[] {
+  const args = ['--ro-bind', '/', '/', '--tmpfs', '/tmp', '--ro-bind', cwd, cwd]
+  for (const dir of writableDirs) args.push('--bind', dir, dir)
+  args.push('--proc', '/proc', '--dev', '/dev', '--setenv', 'TMPDIR', '/tmp', '--chdir', cwd, '--die-with-parent')
+  return args
+}
+
 /**
  * Resolve a path with symlinks followed, tolerating non-existent leaf
  * components. `path.resolve` is purely lexical — it does NOT follow symlinks,
