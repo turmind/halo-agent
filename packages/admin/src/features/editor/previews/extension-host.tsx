@@ -131,21 +131,14 @@ interface Props extends PreviewProps {
  * The extension never fetches the file itself; the host fetches and
  * transfers the bytes (§6). Protocol decisions live in extension-host-logic.ts;
  * this component only executes the effects it returns.
- * An unconfirmed manifest `backend` loads nothing: the host's notice instead
- * (extension-backend-gate.tsx); confirming it mounts the host fresh.
+ * An unconfirmed manifest `backend` is checked where a version is LOADED
+ * (mount / reload): it loads nothing and the host's notice takes the
+ * iframe's place (extension-backend-gate.tsx); confirming it loads it. An
+ * iframe already loaded is never torn down for it — an update to a version
+ * with an unconfirmed backend goes through the usual upgrade path (reload,
+ * or the banner while there are unsaved edits), so the edits can be saved.
  */
-export function ExtensionHostPreview(props: Props) {
-  if (backendPending(props.info)) {
-    return (
-      <PreviewShell name={props.name} downloadUrl={props.downloadUrl} onOpenAsText={props.onOpenAsText}>
-        <div className="flex h-full flex-col"><BackendPendingNotice info={props.info} /></div>
-      </PreviewShell>
-    )
-  }
-  return <HostPreview {...props} />
-}
-
-function HostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText, readOnly }: Props) {
+export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, size, onOpenAsText, readOnly }: Props) {
   const { t, lang } = useI18n()
   const useEditorStore = useScopedEditorStore()
   const { theme } = useTheme()
@@ -166,7 +159,8 @@ function HostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, 
   // to the new document).
   const attemptRef = useRef(attempt)
   const [src, setSrc] = useState<string | null>(null)
-  const [phase, setPhase] = useState<'token' | 'loading' | 'ready' | 'failed'>('token')
+  // 'pending': this version's backend is unconfirmed — nothing loaded.
+  const [phase, setPhase] = useState<'token' | 'loading' | 'ready' | 'failed' | 'pending'>('token')
   const [message, setMessage] = useState<string | null>(null)
   // Last successful export: workspace-relative path + its download URL.
   const [exported, setExported] = useState<{ path: string; url: string } | null>(null)
@@ -366,6 +360,10 @@ function HostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, 
     // tab's dirty dot goes with them.
     if (stateRef.current.dirty) useEditorStore.getState().clearModified(path)
     stateRef.current = initialHostState(grantedCapabilities(info.capabilities, !!readOnly), info.bundle)
+    if (backendPending(info)) {
+      setPhase('pending')
+      return
+    }
     getExtensionToken().then((token) => {
       if (cancelled) return
       mountedVersionRef.current = info.version
@@ -436,6 +434,11 @@ function HostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, 
         .catch(() => { /* file gone or unreadable — nothing to reload */ })
     },
   }), [projectId, path, requestSave, run])
+
+  // Held for an unconfirmed backend: load once the admin confirms it.
+  useEffect(() => {
+    if (phase === 'pending' && !backendPending(info)) remount()
+  }, [phase, info])
 
   // Upgraded while mounted (§9.3): reload unless there are unsaved edits, in
   // which case a banner offers the reload once the user is ready.
@@ -593,7 +596,9 @@ function HostPreview({ info, gone, name, path, projectId, viewUrl, downloadUrl, 
             <a href={exported.url} download className="ml-2 text-[var(--primary)] hover:underline">{t('editor.download')}</a>
           </Banner>
         )}
-        {phase === 'failed' ? (
+        {phase === 'pending' ? (
+          <BackendPendingNotice info={info} />
+        ) : phase === 'failed' ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
             <p className="text-sm text-[var(--foreground)]">{t('editor.extension.unresponsive', { name: info.name })}</p>
             {message && <p className="text-xs text-[var(--muted-foreground)]">{message}</p>}

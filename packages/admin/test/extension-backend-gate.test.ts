@@ -11,6 +11,7 @@ import { ExtensionHostPreview } from '../src/features/editor/previews/extension-
 import { ExtensionsView } from '../src/features/settings/extensions-view'
 import { takeSettingsSection } from '../src/features/settings/settings-nav'
 import * as utils from '../src/shared/utils'
+import { useEditorStore } from '../src/shared/stores/editor-store'
 import { I18nProvider } from '../src/shared/i18n'
 import { en } from '../src/shared/i18n/en'
 import { zh } from '../src/shared/i18n/zh'
@@ -115,6 +116,78 @@ describe('unconfirmed backend: no extension page loads', () => {
     window.removeEventListener('halo:navigate', nav)
     expect((nav.mock.calls[0][0] as CustomEvent).detail).toEqual({ tab: 'settings' })
     expect(takeSettingsSection()).toBe('__extensions')
+  })
+})
+
+// Review-2 #4: the gate sits where a version is LOADED, not around the host.
+// An open preview with unsaved edits whose extension updates to a version
+// with an unconfirmed backend (htrans 1.0.10 → 1.1.0) keeps its iframe and
+// its dirty dot behind the usual "updated" banner; only the reload shows the
+// notice, and confirming then loads the new version.
+describe('update to an unconfirmed backend while a preview is open', () => {
+  const path = '/w/m.vi'
+  const props = (info: ExtensionInfo) => ({ info, name: 'm.vi', path, viewUrl: '/v', downloadUrl: '/d', size: 1 })
+  const v1 = ext('vi', { version: '1.0.10', capabilities: ['save'], backend: undefined })
+  const v2 = ext('vi', { version: '1.1.0', capabilities: ['save'] })
+  const fromFrame = (data: unknown) => act(() => {
+    window.dispatchEvent(new MessageEvent('message', { data, source: iframe()!.contentWindow }))
+  })
+  const modified = () => !!useEditorStore.getState().buffers[path]?.modified
+
+  beforeEach(() => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new Uint8Array([1])))
+    useEditorStore.getState().openFile(path, '', 'plaintext')
+  })
+  afterEach(() => useEditorStore.getState().closeTab(path))
+
+  async function dirtyOn1010() {
+    act(() => root.render(createElement(ExtensionHostPreview, props(v1))))
+    await flush()
+    expect(iframe()?.getAttribute('src')).toBe('/api/extensions/vi/1.0.10/tok/index.html')
+    fromFrame({ haloExt: 1, type: 'ready' })
+    await flush() // the file bytes land (load clears dirty) — the user edits after that
+    await flush()
+    fromFrame({ haloExt: 1, type: 'dirty', dirty: true })
+    expect(modified()).toBe(true)
+    return iframe()!
+  }
+
+  it('keeps the loaded iframe and the dirty dot, offers the reload in a banner', async () => {
+    const before = await dirtyOn1010()
+    act(() => root.render(createElement(ExtensionHostPreview, props(v2))))
+    await flush()
+    expect(iframe()).toBe(before) // same element: not unmounted, not reloaded
+    expect(iframe()!.getAttribute('src')).toBe('/api/extensions/vi/1.0.10/tok/index.html')
+    expect(modified()).toBe(true)
+    expect(host.textContent).toContain('editor.extension.updated')
+    expect(host.textContent).not.toContain('editor.extension.backendPending')
+  })
+
+  it('the reload (after discarding) shows the notice in its place; confirming loads 1.1.0', async () => {
+    await dirtyOn1010()
+    act(() => root.render(createElement(ExtensionHostPreview, props(v2))))
+    await flush()
+    vi.spyOn(utils, 'confirmAction').mockResolvedValue(true) // "discard and reload?"
+    const reload = [...host.querySelectorAll('button')].find((b) => b.textContent === 'editor.extension.reload')!
+    await act(async () => { reload.click() })
+    await flush()
+    expect(iframe()).toBeNull()
+    expect(host.textContent).toContain('editor.extension.backendPending')
+    expect(modified()).toBe(false) // discarded by the user's choice
+    token.mockClear()
+    act(() => root.render(createElement(ExtensionHostPreview, props(ext('vi', { version: '1.1.0', capabilities: ['save'], backend: { entry: 'b.cjs', confirmed: true } })))))
+    await flush()
+    expect(iframe()?.getAttribute('src')).toBe('/api/extensions/vi/1.1.0/tok/index.html')
+  })
+
+  it('clean: the update reloads straight into the notice', async () => {
+    act(() => root.render(createElement(ExtensionHostPreview, props(v1))))
+    await flush()
+    fromFrame({ haloExt: 1, type: 'ready' })
+    act(() => root.render(createElement(ExtensionHostPreview, props(v2))))
+    await flush()
+    expect(iframe()).toBeNull()
+    expect(host.textContent).toContain('editor.extension.backendPending')
   })
 })
 
