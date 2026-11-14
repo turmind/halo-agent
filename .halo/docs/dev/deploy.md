@@ -53,7 +53,7 @@ Nginx is **not required**. Use it only for domain routing, SSL termination, or w
 - pnpm 11 — source builds only (pinned by the root `packageManager`; `corepack enable` picks it up)
 - AWS credentials — optional, only for the Bedrock providers (`~/.aws/credentials`, env vars, or an instance role)
 - bubblewrap (Linux) — needed for the `workspace` / `readonly` access levels: `sudo apt install bubblewrap`; on Ubuntu 23.10+ / 24.04 also the [AppArmor profile](#bubblewrap-on-ubuntu-2310-and-2404-apparmor)
-- RAM — 1 GB recommended; a 0.5 GB box only with a 1 GB swap file persisted in `/etc/fstab` ([Memory and swap](#memory-and-swap)). Disk: about 330 MB for the install, plus about 450 MB of npm cache
+- RAM — 1 GB recommended; a 0.5 GB box only with a 1 GB swap file persisted in `/etc/fstab` ([Memory and swap](#memory-and-swap)). Disk: about 290 MB for the install, plus about 450 MB of npm cache
 
 ### Memory and swap
 
@@ -352,7 +352,7 @@ Use only for a new public release; the retained details here are not extra prepa
 
 **npm token gotcha**: `npm publish` on this package needs a granular access token created with **"Bypass 2FA"** checked — scope / permission alone yields `403 Two-factor authentication or granular access token with bypass 2fa enabled is required`. `npm whoami` and `npm token list` succeed with a non-bypass token, so neither is a valid pre-flight; check `GET https://registry.npmjs.org/-/npm/v1/tokens` (with the token as bearer) and look for `"bypass_2fa": true` on the token in use before starting a release.
 
-The published package contains a single bundled JS entry (`dist/index.js`, ~1.7 MB) plus the evo wrapper the server spawns as its own process (`dist/evo-wrapper.js`, ~130 KB; `build-bundle.mjs` fails without it), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint is about 330 MB on disk (`du`, 2.2.5; mostly `node_modules`); npm's own cache adds about 450 MB.
+The published package contains a single bundled JS entry (`dist/index.js`, ~1.7 MB) plus the evo wrapper the server spawns as its own process (`dist/evo-wrapper.js`, ~130 KB; `build-bundle.mjs` fails without it), the Feishu SDK bundled with its deps (`dist/feishu-sdk.cjs`, ~0.7 MB, loaded on the first Feishu bot connect, so it is not an npm dependency; see [feishu.md](../design/feishu.md#sdk-loading)), all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Total install footprint is about 290 MB on disk (`du`, x86_64, after 2.2.5; mostly `node_modules`; 2.2.5 itself is about 320 MB); npm's own cache adds about 450 MB.
 
 Two log files: `~/.halo/logs/server.log` is the stdout/stderr capture of `halo server start -d`, whether the user unit or the off-systemd supervisor runs it (what `halo server logs` tails; the supervisor's `[respawn]` lines appear only off systemd; a system unit logs to the journal instead); `~/.halo/global/logs/server.log` is the server's structured, rotated log (level `general.logging.level`, default `warn`).
 

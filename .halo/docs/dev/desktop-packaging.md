@@ -159,8 +159,9 @@ dependency work. Three levers, in order of how often they help:
 generation, and Gatekeeper scanning the ~350 MB of `extraResources`. Neither
 fast-staging nor `npmRebuild:false` touches that; it runs on every build.
 A further win would be de-duplicating `cli-runtime` (~137 MB) against
-`server-runtime` (~92 MB) — they share most deps (lark sdk, drizzle,
-better-sqlite3, protobufjs) — but that needs the two trees to physically share
+`server-runtime` (~92 MB) — they share most deps (drizzle, better-sqlite3,
+aws-sdk; the Feishu SDK only sits in server-runtime's `node_modules`, the cli
+bundle carries it as `dist/feishu-sdk.cjs`) — but that needs the two trees to physically share
 files without breaking cli's standalone require paths; deferred.
 
 ## Why `CI=true` is mandatory

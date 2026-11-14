@@ -16,6 +16,15 @@ Halo server (9527) ──┤├── channels/wechat/              ├── Se
 
 Feishu uses the official SDK's `Lark.WSClient` to maintain a persistent WebSocket connection for event delivery. Unlike Telegram (long-polling), Feishu's long-connect receives `im.message.receive_v1` events pushed by the server over wss.
 
+### SDK loading
+
+The SDK (`@larksuiteoapi/node-sdk`) costs about 24 MB of heap once loaded, so it loads on the first account connect, never at startup. `channels/feishu/lark-sdk.ts` is the only module importing its values (it re-exports `WSClient` / `EventDispatcher` / `LoggerLevel`); `handler.ts` only imports its types statically and `await import('./lark-sdk.js')` inside `connect()`. A server with no enabled Feishu account never loads it.
+
+- **Source / desktop runs** (tsc output + `node_modules`): the SDK is a normal dependency of `@turmind/halo-server` and `lark-sdk.js` resolves it from there.
+- **npm package**: the SDK is not a dependency of `@turmind/halo`. `packages/cli/scripts/build-bundle.mjs` bundles `lark-sdk.js` with the SDK's own deps (axios, protobufjs, lodash.*, qs; `ws` stays external) into `dist/feishu-sdk.cjs` (~0.7 MB, tree-shaken from the SDK's ESM build down to the three exports), and rewrites the main bundle's import of `lark-sdk.js` to that file. The rewrite is needed because the main bundle has no code splitting: a dynamic import of a bundled module gets inlined into `index.js`, and the SDK source would be on the heap at startup again. The build fails if the SDK ends up inlined. The packages' license texts ship beside it as `dist/feishu-sdk.licenses.txt`.
+- A new SDK export `handler.ts` needs must be added to `lark-sdk.ts`; anything else of the SDK is not in the npm build.
+- In the npm build the SDK can't find its own `package.json`, so its HTTP `User-Agent` reads `oapi-node-sdk/unknown` rather than `oapi-node-sdk/<version>`.
+
 ## Data model
 
 ### Workspace ↔ Bot mapping
@@ -71,6 +80,7 @@ Files: `packages/server/src/channels/feishu/`
 - `types.ts` — FeishuAccount, FeishuEventEnvelope, FeishuMessageEvent interfaces
 - `accounts.ts` — DAL (listAccounts / getAccount / insertAccount / updateAccount / deleteAccount / findAccountByAppId)
 - `handler.ts` — Lark.WSClient setup, event dispatch, message handling, mention detection, media ingestion; session routing + listener/route bookkeeping come from `channels/shared/inbound.ts` (`InboundBridge` / `deliverInbound` / `dispatchChannelCommand`)
+- `lark-sdk.ts` — the only module importing the SDK's values; `handler.ts` `import()`s it on first connect ([SDK loading](#sdk-loading))
 - `event-adapter.ts` — AgentSessionEvent stream → coalesced Feishu message replies (buffer + flush at paragraph boundaries)
 - `api.ts` — HTTP client (tenant token caching / getBotInfo / sendMessage / replyMessage / uploadImage / uploadFile / downloadResource / decryptWebhookBody / searchFeishuTargets / openLongConnection); authenticated calls go through `fetchWithTenantToken` (401 → drop the cached token, retry once) and replies are parsed by `readFeishuJson`
 - `cron-dispatcher.ts` — registers the cron dispatcher, requires explicit chatId targets

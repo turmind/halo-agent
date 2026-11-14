@@ -35,7 +35,7 @@ halo server start              # → 打开 http://localhost:9527
 
 任意一家模型 key 就能跑 —— Anthropic、OpenAI（或任何 OpenAI 兼容端点）、Gemini、DeepSeek、Kimi、Qwen……**不需要** AWS 账号，Bedrock 只是[其中一个 provider](#模型)（而且可以不填 key，直接走 AWS 凭证链）。
 
-- **内存**：推荐至少 1 GB 内存 —— server 空闲时约 160 MB，但 `npm install -g` 峰值约 540 MB。0.5 GB 的机器（如 t4g.nano）必须加 1 GB swap 文件并写进 `/etc/fstab`，否则安装会被 OOM 杀掉，装好后 server 也会被杀（见 [deploy.md](.halo/docs/dev/deploy.md#memory-and-swap)）。本机语音转文字（语音输入、会议录音）用过一次后会常驻约 400 MB。安装占磁盘约 330 MB。
+- **内存**：推荐至少 1 GB 内存 —— server 空闲时约 160 MB，但 `npm install -g` 峰值约 540 MB。0.5 GB 的机器（如 t4g.nano）必须加 1 GB swap 文件并写进 `/etc/fstab`，否则安装会被 OOM 杀掉，装好后 server 也会被杀（见 [deploy.md](.halo/docs/dev/deploy.md#memory-and-swap)）。本机语音转文字（语音输入、会议录音）用过一次后会常驻约 400 MB。安装占磁盘约 290 MB。
 - **`sudo`**：系统级 Node（apt / NodeSource 装的）执行 `npm install -g` 要加 `sudo`；用 nvm / fnm 则不用。
 - **`halo setup` 里**：问到 *Configure model provider keys now?* 时选 **Configure…**（默认项）。选好 provider、粘贴 key，再选 **── Done**（列表最后一项，按 ↑ 可以直接绕到它），最后在 *Switch default agent to …* 上回车。
 - **远程主机上**：用 `halo server start -d`（不加 `-d` 会留在前台，SSH 一断就退出；在带 systemd 的 Linux 上，`-d` 会装成开机自启的用户服务），再用 `ssh -L 9527:localhost:9527 user@host` 建隧道，在本机打开 `http://localhost:9527`。不要在安全组里放开 9527 —— 见[现状与局限](#现状与局限)。
