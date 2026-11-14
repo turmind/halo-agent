@@ -16,7 +16,7 @@ import path from 'node:path'
 
 const REGISTRY = path.resolve(import.meta.dirname, '..', 'src', 'extensions', 'registry.ts')
 const RULE_CONSTANTS = ['ID_RE', 'VERSION_RE', 'FILE_EXT_RE', 'CAPABILITIES', 'PLATFORMS', 'SETTING_KEY_RE', 'SETTING_TYPES']
-const EXPECTED = '1ba867c21898a891b5e6678e8b3b97f2a4eedba1d4992aeef1fb67d0bd9101f8'
+const EXPECTED = 'd4e769b570e7cbc933473dd7e4aef65081aeaff8749fb37919c87855164da3dc'
 
 function rulesSource(src: string): string {
   const lines = src.split('\n')

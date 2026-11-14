@@ -246,7 +246,7 @@ describe('PATCH /api/extensions/:id  (on / off)', () => {
     expect((await asset('glb', '0.9.0', 'index.html')).status).toBe(404)
   })
 
-  it('off = not installed for getExtension — the gate of the transcribe / stt handshakes (403)', async () => {
+  it('off = not installed for getExtension — the gate of the transcribe handshake / backend proxy (403)', async () => {
     await upload(app, await zip(), cookie)
     expect(ext.getExtension('glb')?.id).toBe('glb')
     await patch('glb', { enabled: false })

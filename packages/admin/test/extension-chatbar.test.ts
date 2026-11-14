@@ -52,7 +52,7 @@ const observers: { cb: () => void; targets: Element[] }[] = []
  *    on screen); it follows the wrapper by restyling — the iframe never
  *    remounts;
  *  - iframe grant = the activity page's (sandbox, media-only allow, no
- *    referrer), capabilities = manifest ∩ { media, transcribe, stt-local }.
+ *    referrer), capabilities = manifest ∩ { media, transcribe }.
  * Rendered without I18n / Theme providers: `t()` echoes keys, lang = 'en'.
  */
 
@@ -63,7 +63,7 @@ function ext(id: string, over: Partial<ExtensionInfo> = {}): ExtensionInfo {
   }
 }
 
-const ctx: ActivityContext = { capabilities: ['media', 'stt-local'], theme: 'dark', themeVars: { background: '#000' }, platform: 'web', lang: 'en' }
+const ctx: ActivityContext = { capabilities: ['media', 'transcribe'], theme: 'dark', themeVars: { background: '#000' }, platform: 'web', lang: 'en' }
 const frame = (f: Record<string, unknown>) => ({ haloExt: 1, ...f }) as ExtensionClientFrame
 
 describe('chatbarEntries', () => {
@@ -101,7 +101,7 @@ describe('chatbar logic', () => {
   it('ready → ready + init(view: chatbar) with the file-less fields + busy reset; a second ready re-sends it', () => {
     const first = onChatbarFrame({ ready: false }, frame({ type: 'ready', protocol: 1 }), ctx)
     expect(first.state.ready).toBe(true)
-    const init = { type: 'post', frame: { haloExt: 1, type: 'init', view: 'chatbar', protocol: 1, capabilities: ['media', 'stt-local'], theme: 'dark', themeVars: { background: '#000' }, platform: 'web', lang: 'en' } }
+    const init = { type: 'post', frame: { haloExt: 1, type: 'init', view: 'chatbar', protocol: 1, capabilities: ['media', 'transcribe'], theme: 'dark', themeVars: { background: '#000' }, platform: 'web', lang: 'en' } }
     expect(first.effects).toEqual([{ type: 'ready' }, init, { type: 'busy', busy: false }])
     expect(onChatbarFrame(first.state, frame({ type: 'ready', protocol: 1 }), ctx).effects).toEqual([{ type: 'ready' }, init, { type: 'busy', busy: false }])
     expect(onChatbarFrame({ ready: true }, frame({ type: 'error', message: 'no mic' }), ctx).effects).toEqual([{ type: 'error', message: 'no mic' }])
@@ -163,8 +163,8 @@ describe('chatbar logic', () => {
     expect(chatbarReducer(CHATBAR_CLOSED, { type: 'close' })).toBe(CHATBAR_CLOSED)
   })
 
-  it('capabilities: media / transcribe / stt-local only (shared with the activity page)', () => {
-    expect(activityCapabilities(['save', 'media', 'transcribe', 'fs-read', 'stt-local'])).toEqual(['media', 'transcribe', 'stt-local'])
+  it('capabilities: media / transcribe only (shared with the activity page)', () => {
+    expect(activityCapabilities(['save', 'media', 'transcribe', 'fs-read'])).toEqual(['media', 'transcribe'])
   })
 
   it('insertAtSelection replaces the selection, caret after; clamps a stale selection', () => {
@@ -265,7 +265,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
   })
 
   it('opens the panel above the input with the activity grant; toggles, ×, Esc close; outside click does not', async () => {
-    act(() => setExtensions({ extensions: [ext('voice', { capabilities: ['media', 'stt-local', 'save'], version: '2.0.0', chatbar: { height: 200, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
+    act(() => setExtensions({ extensions: [ext('voice', { capabilities: ['media', 'transcribe', 'save'], version: '2.0.0', chatbar: { height: 200, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
     await renderInput()
     expect(iframe()).toBeNull()
     act(() => button('Voice')!.click())
@@ -288,7 +288,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     deliver(window, { haloExt: 1, type: 'ready', protocol: 1 }) // not our iframe
     expect(posted).not.toHaveBeenCalled()
     deliver(el.contentWindow, { haloExt: 1, type: 'ready', protocol: 1 })
-    expect(posted.mock.calls[0][0]).toMatchObject({ type: 'init', view: 'chatbar', capabilities: ['media', 'stt-local'] })
+    expect(posted.mock.calls[0][0]).toMatchObject({ type: 'init', view: 'chatbar', capabilities: ['media', 'transcribe'] })
 
     act(() => { document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
     expect(iframe()).toBeTruthy()                                   // outside click keeps it

@@ -14,9 +14,7 @@
  * `.state.json` is a direct child too, so its rename lands here the same way.
  */
 import fs, { type FSWatcher } from 'node:fs'
-import type { ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { broadcast } from '../ws/broadcast.js'
-import { sttModels } from '../stt/models.js'
 import { extensionBackends } from './backend.js'
 import { rejudgeExtensionUpdates } from '../updates/extension-check.js'
 import { extensionsRoot, getSnapshot, scanExtensions, snapshotKey } from './registry.js'
@@ -39,7 +37,6 @@ function scheduleFlush(): void {
  *  themselves, the watcher path is the single notifier. */
 export function rescanAndBroadcast(): void {
   const snap = scanExtensions()
-  reconcileSttModels(snap)
   // A removed / switched-off / updated extension's backend stops now (an
   // update's new version starts on its next request).
   extensionBackends.reconcile(snap)
@@ -48,14 +45,6 @@ export function rescanAndBroadcast(): void {
   lastKey = key
   broadcast({ type: 'extension:changed', ...snap })
   rejudgeExtensionUpdates()
-}
-
-/** An installed `stt-local` extension wants its model files: start the
- *  download unless they are ready or already coming (no-op otherwise). */
-function reconcileSttModels(snap: ExtensionsSnapshot): void {
-  if (!snap.extensions.some((e) => e.capabilities.includes('stt-local'))) return
-  const { state } = sttModels.status()
-  if (state !== 'ready' && state !== 'downloading') void sttModels.ensure()
 }
 
 function openWatcher(root: string): void {
@@ -96,7 +85,6 @@ export function start(): void {
   }
   const snap = scanExtensions()
   lastKey = snapshotKey(snap)
-  reconcileSttModels(snap)
   openWatcher(root)
   const { extensions, disabled, errors } = getSnapshot()
   if (extensions.length > 0 || disabled.length > 0 || errors.length > 0) {

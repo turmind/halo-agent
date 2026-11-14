@@ -25,7 +25,6 @@ import { createShowRoutes } from './routes/halo-city.js'
 import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
 import { createTranscribeProxy, TRANSCRIBE_PATH } from './routes/transcribe-ws.js'
-import { createSttProxy, STT_PATH } from './routes/stt-ws.js'
 import { createExtBackendRoutes, createExtBackendUpgrade, EXT_BACKEND_PREFIX } from './routes/ext-backend.js'
 import { extensionBackends } from './extensions/backend.js'
 import { createJupyterChannels, createJupyterRoutes, JUPYTER_CHANNELS_PATH } from './routes/jupyter.js'
@@ -679,7 +678,6 @@ if (!AGENTCORE) {
 // Extension transcription proxy — needs installed extensions + per-extension
 // settings, neither of which exists in AgentCore mode.
 const transcribe = AGENTCORE ? null : createTranscribeProxy()
-const stt = AGENTCORE ? null : createSttProxy()
 const jupyterChannels = jupyter ? createJupyterChannels(jupyter) : null
 
 // AgentCore mode has no WS surface: every upgrade gets the router's 400.
@@ -687,7 +685,6 @@ const upgradeRoutes = new Map<string, UpgradeHandler>(AGENTCORE ? [] : [
   ['/ws', (req, socket, head) => wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))],
 ])
 if (transcribe) upgradeRoutes.set(TRANSCRIBE_PATH, transcribe.handleUpgrade)
-if (stt) upgradeRoutes.set(STT_PATH, stt.handleUpgrade)
 if (jupyterChannels) upgradeRoutes.set(JUPYTER_CHANNELS_PATH, jupyterChannels.handleUpgrade)
 if (nodeHub) upgradeRoutes.set(NODE_WS_PATH, nodeHub.handleUpgrade)
 ;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes, AGENTCORE ? [] : [[EXT_BACKEND_PREFIX, createExtBackendUpgrade()]]))
@@ -724,8 +721,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Machines see 1001 and reconnect once the server is back.
   nodeHub?.close()
   transcribe?.close()
-  // Also aborts a model download in progress (the .part is resumed next boot).
-  stt?.close()
   // Stops the jupyter server and with it every kernel (bounded to 5s).
   jupyterChannels?.close()
   await jupyter?.stop()

@@ -54,12 +54,11 @@ export function initialActivityState(): ActivityState {
   return { ready: false }
 }
 
-/** What the page host grants: `media` (the iframe's `allow`), `transcribe`
- *  and `stt-local` (the server's cookie-gated WS endpoints) work without a
- *  file; `save` / `fs-read` need the file host's frames, which this host
+/** What the page host grants: `media` (the iframe's `allow`) and
+ *  `transcribe` (the server's cookie-gated WS proxy) work without a file; `save` / `fs-read` need the file host's frames, which this host
  *  doesn't answer. */
 export function activityCapabilities(declared: readonly ExtensionCapability[]): ExtensionCapability[] {
-  return declared.filter((c) => c === 'media' || c === 'transcribe' || c === 'stt-local')
+  return declared.filter((c) => c === 'media' || c === 'transcribe')
 }
 
 /** `ready` on a file-less page: drop the overlay and send init for `view`.

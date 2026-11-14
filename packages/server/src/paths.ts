@@ -262,12 +262,6 @@ export function globalExtensionDataDir(id: string): string {
   return path.join(globalDir(), 'extension-data', id)
 }
 
-/** `~/.halo/global/stt-models` — on-device speech-to-text model files
- *  (downloaded on demand by stt/models.ts). */
-export function globalSttModelsDir(): string {
-  return path.join(globalDir(), 'stt-models')
-}
-
 /** `~/.halo/global/logs` — root for daemon logs. */
 export function globalLogsDir(): string {
   return path.join(globalDir(), 'logs')

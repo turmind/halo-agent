@@ -117,14 +117,14 @@ lockstepVersionGate()
 //
 // Every npm dep is bundled except EXTERNAL_DEPS, which stay the published
 // package's only dependencies (ranges from server's package.json):
-// - better-sqlite3, node-pty, sherpa-onnx-node, @parcel/watcher: native
+// - better-sqlite3, node-pty, @parcel/watcher: native
 //   bindings — npm install fetches the right prebuilt binary per platform.
 // - @xterm/headless, @xterm/addon-serialize: pure JS, but terminal-manager.ts
 //   loads them with a synchronous createRequire on the first terminal; bundled
 //   they would be either on the heap at startup or async, which changes when
 //   `terminal:start` replies.
 // A new native dep must be added here — esbuild can't bundle a `.node` binding.
-const EXTERNAL_DEPS = ['better-sqlite3', 'node-pty', 'sherpa-onnx-node', '@parcel/watcher', '@xterm/headless', '@xterm/addon-serialize']
+const EXTERNAL_DEPS = ['better-sqlite3', 'node-pty', '@parcel/watcher', '@xterm/headless', '@xterm/addon-serialize']
 // Optional requires inside bundled deps (ws → bufferutil / utf-8-validate,
 // node-fetch → encoding). npm never installed them, so they stay external and
 // unresolvable: the deps' try/catch fallbacks run exactly as before.

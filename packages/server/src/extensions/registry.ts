@@ -33,7 +33,7 @@ export const MANIFEST_FILE = 'halo-extension.json'
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
 const FILE_EXT_RE = /^\.[a-z0-9]+$/
-const CAPABILITIES: ReadonlySet<string> = new Set<ExtensionCapability>(['save', 'media', 'transcribe', 'fs-read', 'stt-local'])
+const CAPABILITIES: ReadonlySet<string> = new Set<ExtensionCapability>(['save', 'media', 'transcribe', 'fs-read'])
 const PLATFORMS: ReadonlySet<string> = new Set<ExtensionPlatform>(['web', 'desktop-mac', 'desktop-win', 'desktop-linux'])
 /** Settings keys become the leaf of `ext-<id>.{params|secrets}.<key>`. */
 const SETTING_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/
@@ -319,7 +319,7 @@ export function getSnapshot(): ExtensionsSnapshot {
 
 /** Installed, valid and switched ON extension by id, or undefined. A
  *  switched-off one counts as not installed (the proxies' handshakes, the
- *  STT model reconcile) — use getInstalledExtension where off still counts. */
+ *  backend gate) — use getInstalledExtension where off still counts. */
 export function getExtension(id: string): ExtensionInfo | undefined {
   return snapshot.extensions.find((e) => e.id === id)
 }

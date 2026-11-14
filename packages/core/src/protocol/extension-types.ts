@@ -15,10 +15,8 @@
  *  `transcribe` = may open the server's `/api/transcribe/stream` WS proxy;
  *  `fs-read` = read-only `fs` over the workspace (`scope: 'workspace'`) and
  *  the whole machine (`scope: 'system'`) + the host file picker (`pick`),
- *  bundle or not;
- *  `stt-local` = may open the server's `/api/stt/stream` WS (on-device
- *  SenseVoice speech-to-text, no cloud credentials). */
-export type ExtensionCapability = 'save' | 'media' | 'transcribe' | 'fs-read' | 'stt-local'
+ *  bundle or not. */
+export type ExtensionCapability = 'save' | 'media' | 'transcribe' | 'fs-read'
 
 /** One declared `settings.params[]` / `settings.secrets[]` entry — same field
  *  format as a skill's `config.yaml`. Declarations only: values live in the

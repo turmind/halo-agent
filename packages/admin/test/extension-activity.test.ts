@@ -128,7 +128,7 @@ describe('onActivityFrame', () => {
   })
 
   it('grants only the capabilities a file-less page can use', () => {
-    expect(activityCapabilities(['save', 'media', 'transcribe', 'fs-read', 'stt-local'])).toEqual(['media', 'transcribe', 'stt-local'])
+    expect(activityCapabilities(['save', 'media', 'transcribe', 'fs-read'])).toEqual(['media', 'transcribe'])
   })
 })
 
