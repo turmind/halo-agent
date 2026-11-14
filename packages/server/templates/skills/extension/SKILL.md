@@ -77,6 +77,10 @@ short `-` list; `(none)` when empty.
 `bash EXT remove <id>` → deletes `~/.halo/global/extensions/<id>/`. Confirm with
 the user first if they didn't name the id explicitly.
 
+On a Windows server, `install` over an installed extension and `remove` refuse
+one that runs a backend program ("… update or remove it from Settings →
+Extensions"): relay that — the Settings page stops the program first.
+
 ## models
 
 Updates the model provider list (the providers / models / endpoints the agent

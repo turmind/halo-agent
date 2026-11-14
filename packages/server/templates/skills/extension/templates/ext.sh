@@ -269,6 +269,18 @@ safe_unzip() {
   unzip -q "$1" -d "$2"
 }
 
+# Windows (Git Bash / MSYS / Cygwin): a running extension backend holds files
+# in its directory (cwd, native addons), so renaming or deleting `<id>/` from
+# here can fail half-way — and nothing here can stop it (the server does, for
+# Settings → Extensions). Refuse for an installed extension with a manifest
+# `backend`; everything else goes ahead.
+windows_backend_guard() {
+  case $(uname -s) in MINGW*|MSYS*|CYGWIN*) ;; *) return 0 ;; esac
+  node -e 'try { process.exit(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).backend ? 1 : 0) } catch { process.exit(0) }' "$ROOT/$1/halo-extension.json" && return 0
+  echo "$1 runs a backend program on this server; on Windows update or remove it from Settings → Extensions (it stops the program first)" >&2
+  exit 1
+}
+
 # Drop extension $1's state (on / off, backend confirmation) from
 # `$ROOT/.state.json` (the server's extensions/state.ts owns that file; this
 # is its forgetExtension), so the id starts on and unconfirmed. Missing or unreadable file = nothing to drop. A failed write only
@@ -348,6 +360,7 @@ case $cmd in
       [[ $ver == "$want" ]] || { echo "invalid extension: manifest version \"$ver\" does not match update.json \"$want\"" >&2; exit 1; }
     fi
     mkdir -p "$ROOT"
+    if [[ -d $ROOT/$id ]]; then windows_backend_guard "$id"; fi
     stage="$ROOT/.tmp-$id-$RANDOM$RANDOM"
     mv "$dir" "$stage"
     old=""
@@ -382,6 +395,7 @@ case $cmd in
     id=${1:?usage: ext.sh remove <id>}
     [[ $id =~ $ID_RE ]] || { echo "invalid id: $id" >&2; exit 1; }
     [[ -d $ROOT/$id ]] || { echo "not installed: $id" >&2; exit 1; }
+    windows_backend_guard "$id"
     rm -rf "$ROOT/$id"
     state_forget "$id"
     echo "removed $id" ;;
