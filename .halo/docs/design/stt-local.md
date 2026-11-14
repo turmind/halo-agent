@@ -2,7 +2,7 @@
 
 `voice-input` and `htrans` (≥ 1.1.0, Halo ≥ 2.3.0) each ship an on-device speech-to-text program as their [extension backend](canvas-extensions.md#extension-backends): the iframe streams microphone audio to `/api/ext/<id>/stream` and gets back text. Everything runs on the Halo server, in that extension's own child process: SenseVoice-Small (int8) decodes, Silero VAD cuts the audio into segments, optionally pyannote segmentation + CAM++ label who spoke (`speakers=1`), and `sherpa-onnx-node` hosts all of them. There is no cloud call and no credential to configure. Model files are downloaded the first time they're needed. Halo 2.2.x had this engine built into the server (`/api/stt/stream`, capability `stt-local`); 2.3.0 removed it, and the same code moved into the extensions with its behaviour, frames and models unchanged — this doc describes it there.
 
-Code (halo-hub, one copy built into each extension): `shared/stt-backend/src/models.ts` (model files + downloader), `engine.ts` (recognizer, VAD, decode queue, diarizer), `speakers.ts` (speaker matching + split, pure), `main.ts` (WS server on `HALO_EXT_SOCKET`, `busy` IPC); `shared/stt-backend/build.sh` bundles it with the target platform's sherpa-onnx package into `extensions/<id>/backend/`. Halo's side is only the generic backend host (`packages/server/src/extensions/backend.ts` + `routes/ext-backend.ts`).
+Code (halo-hub, one copy built into each extension): `shared/stt-backend/src/models.ts` (model files + downloader), `engine.ts` (recognizer, VAD, decode queue, diarizer), `speakers.ts` (speaker matching + split, pure), `stream.ts` (the `/stream` WS endpoint: frames, model push, per-connection stream), `main.ts` (the process around it: listen on `HALO_EXT_SOCKET`, `ready` / `busy` IPC, SIGTERM); tests in `shared/stt-backend/test/` (`npm test`). `shared/stt-backend/build.sh` bundles it with the target platform's sherpa-onnx package into `extensions/<id>/backend/`. Halo's side is only the generic backend host (`packages/server/src/extensions/backend.ts` + `routes/ext-backend.ts`).
 
 ## Models and licenses
 
@@ -54,7 +54,7 @@ missing ──ensure()──▶ downloading{received,total} ──all files ok�
 
 ### Triggers
 
-- **WS connect** (`main.ts`): if the model isn't ready, `ensure()` runs, and that socket then receives `model` frames until `ready` or `error`.
+- **WS connect** (`stream.ts`): if the model isn't ready, `ensure()` runs, and that socket then receives `model` frames until `ready` or `error`.
 - **Backend start**: `main.ts` calls `ensure()` once listening. Halo starts the backend once right after the admin confirms it (and on every later cold start), so confirming the extension is the moment the ~271 MB fetch starts. While a download runs with no stream open, the backend sends Halo `{ type: 'busy', busy: true }` so the idle stop waits for it (`busy: false` when it ends, either way). An `error` is retried by the next stream or the next start.
 
 ## Engine
@@ -97,7 +97,7 @@ Each stream keeps a 30 s ring of raw samples (it must reach back past a 20 s seg
 
 ## WS `/api/ext/<id>/stream`
 
-A `ws` server on the backend's own socket; Halo's `routes/ext-backend.ts` forwards `/api/ext/<id>/stream[?…]` to it as `/stream[?…]`.
+A `ws` server (`stream.ts`) on the backend's own socket (`main.ts` listens); Halo's `routes/ext-backend.ts` forwards `/api/ext/<id>/stream[?…]` to it as `/stream[?…]`.
 
 - **Query**: optional `speakers=1`. Only the exact value `1` turns speaker labels on (loading the diarizer if this is the first such stream); absent or any other value = no labels, byte-identical frames to before. voice-input never sends it; htrans ≥ 1.0.10 does when "Identify speakers" is ticked with the on-device engine.
 
@@ -116,7 +116,7 @@ A `ws` server on the backend's own socket; Halo's `routes/ext-backend.ts` forwar
 
 ## Logs
 
-Backend stdout, which Halo logs as `[ExtBackend:<id>] …`, with counts and durations: `stream open ext=…[ speakers=1]`, `stream closed after Ns ext=… segments=N audio=Ns[ speakers=N]`, `stream error ext=… code=…`, `engine loaded in Nms (threads=N)` / `engine load failed: …`, `speaker diarizer loaded in Nms` / `speaker diarizer load failed: …`, `model download start`, `downloaded <file> from <source> (N MB in Ns)`, `download <file> from <source> failed: <reason>`, `<file>: resuming at N bytes`. **Recognized text and audio are never logged.** Halo logs a backend's stdout at info and its stderr at warn; the server's default level is `warn`, so these lines show up at `general.logging.level: info` (or `HALO_LOG_LEVEL=info`).
+Backend stdout, which Halo logs as `[ExtBackend:<id>] …`, with counts and durations: `listening (rss=NMB)`, `stream open[ speakers=1]`, `stream closed after Ns segments=N audio=Ns[ speakers=N] rss=NMB`, `stream error code=…`, `engine loaded in Nms (threads=N)` / `engine load failed: …`, `speaker diarizer loaded in Nms` / `speaker diarizer load failed: …`, `model download start`, `downloaded <file> from <source> (N MB in Ns)`, `download <file> from <source> failed: <reason>`, `<file>: resuming at N bytes`. **Recognized text and audio are never logged.** Halo logs a backend's stdout at info and its stderr at warn; the server's default level is `warn`, so these lines show up at `general.logging.level: info` (or `HALO_LOG_LEVEL=info`).
 
 ## Known limits
 
