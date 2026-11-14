@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Install: the npm package now carries its JavaScript dependencies inside `dist/`, and only the native modules (better-sqlite3, node-pty, sherpa-onnx-node, @parcel/watcher) plus the xterm terminal emulator are still installed by npm. `npm install -g @turmind/halo` installs 50 packages instead of 355, takes about 120 MB of disk instead of 286 MB (npm cache about 43 MB instead of 445 MB) and peaks at about 260 MB of memory instead of about 600 MB on our x86 test machine. Telegram, WeCom, the WeChat QR code and OpenTelemetry now load on first use, so an idle server uses about 95 MB instead of 133 MB, and `halo --version` starts in 0.03 s instead of 1 s. The download grows from about 8.1 MB to 10.5 MB. License texts of the bundled packages are in `dist/third-party-licenses.txt`. Channels, the CLI / TUI and the server behave as before.
+
 ## [2.2.6] - 2026-11-14
 
 - Feishu / Lark: the server no longer loads the Feishu SDK at startup. It loads on the first Feishu bot connect, so a server with no Feishu bot idles about 20 MB lower (about 130 MB instead of 151 MB on our test machine) and its startup peak drops from about 243 MB to about 201 MB. A server with a Feishu bot also uses about 18 MB less, because the npm package now carries the SDK as one small bundled file instead of installing it: `npm install -g @turmind/halo` takes about 33 MB less disk (about 286 MB instead of 319 MB) and no longer pulls in protobufjs, lodash.* and qs. Feishu bots behave as before.

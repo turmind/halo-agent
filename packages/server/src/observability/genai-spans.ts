@@ -17,9 +17,11 @@
  * hot path to a single boolean when observability is off. Message / tool text
  * is only attached when `general.observability.capture_content` is on.
  */
-import { context, trace, SpanStatusCode, type Context, type Span } from '@opentelemetry/api'
+import type { Context, Span } from '@opentelemetry/api'
 import type { AgentEvent, AnthropicMessage, ContentBlock } from '../agents/agent-loop.js'
-import { tracer, getMeter, enabled, captureContent } from './otel.js'
+// `api` is loaded by initObservability before `enabled` turns true, and every
+// hook below returns early on !enabled — hence the `api!`.
+import { api, tracer, getMeter, enabled, captureContent } from './otel.js'
 
 /** The slice of AgentSession the hooks read — structural so tests can stub it. */
 export interface SpanSessionContext {
@@ -167,7 +169,7 @@ export function beginTurn(session: SpanSessionContext, message: string | Content
   if (captureContent()) span.setAttribute('gen_ai.system_instructions', cap(session.systemPrompt, SYSTEM_PROMPT_CAP))
   turns.set(session.id, {
     span,
-    ctx: trace.setSpan(context.active(), span),
+    ctx: api!.trace.setSpan(api!.context.active(), span),
     startMs,
     input: inputText(message),
     finalText: '',
@@ -235,7 +237,7 @@ function recordModelCall(session: SpanSessionContext, turn: TurnState, event: Ag
   }
   span.end(now)
 
-  const chatCtx = trace.setSpan(turn.ctx, span)
+  const chatCtx = api!.trace.setSpan(turn.ctx, span)
   for (const tc of turn.cycleToolCalls) {
     turn.pendingTools.set(tc.id, { name: tc.name, args: tc.args, parentCtx: chatCtx, startMs: now })
   }
@@ -303,7 +305,7 @@ export function endTurn(session: SpanSessionContext, outcome: { error?: string }
     turn.span.setAttribute('gen_ai.task.output', cap(turn.finalText || turn.allText, ATTR_CAP))
   }
   if (outcome.error) {
-    turn.span.setStatus({ code: SpanStatusCode.ERROR, message: outcome.error })
+    turn.span.setStatus({ code: api!.SpanStatusCode.ERROR, message: outcome.error })
     // turnError is `<ErrName>: <msg>` when the provider gave a class name, else
     // the bare message — keep error.type low-cardinality either way.
     const errName = outcome.error.match(/^([A-Za-z]\w*(?:Exception|Error))\b/)?.[1]

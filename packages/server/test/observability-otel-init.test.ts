@@ -6,8 +6,8 @@ import { join } from 'node:path'
 /**
  * initObservability / shutdownObservability contract, shared by the server and
  * `halo cli` / `halo tui` (packages/cli/src/harness.ts):
- *  - no endpoint → false, otel-sdk.ts never loaded (the unconfigured cli start
- *    pays nothing);
+ *  - no endpoint → false, neither otel-sdk.ts nor the api packages loaded (the
+ *    unconfigured cli start pays nothing);
  *  - endpoint → providers registered with the caller's `halo.process` kind;
  *  - the exit flush is capped (dead collector can't hang exit) and idempotent
  *    (a signal landing mid-flush shares the in-flight one).
@@ -51,6 +51,8 @@ describe('initObservability', () => {
     const otel = await loadOtel()
     expect(await otel.initObservability('cli')).toBe(false)
     expect(otel.enabled).toBe(false)
+    expect(otel.api).toBe(null)
+    expect(otel.apiLogs).toBe(null)
     expect(registerSdk).not.toHaveBeenCalled()
     // Nothing registered → shutdown is an instant no-op.
     expect(await otel.shutdownObservability()).toBe(true)

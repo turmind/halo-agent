@@ -26,6 +26,7 @@ vi.mock('../src/channels/wechat/send-media.js', () => ({
 const tgState = vi.hoisted(() => ({
   sent: [] as Array<{ chatId: number | string; text: string }>,
   media: [] as string[],
+  bots: 0,
 }))
 vi.mock('grammy', () => ({
   Bot: class {
@@ -33,7 +34,7 @@ vi.mock('grammy', () => ({
       sendMessage: async (chatId: number | string, text: string) => { tgState.sent.push({ chatId, text }); return {} },
       sendPhoto: async (_chatId: number | string, file: { path: string }) => { tgState.media.push(file.path); return {} },
     }
-    constructor(public token: string) {}
+    constructor(public token: string) { tgState.bots++ }
     catch(): void {}
     command(): void {}
     on(): void {}
@@ -101,7 +102,7 @@ function startWechat(accessLevel: AccountAccessLevel): void {
   wx = startWechatChannel({ registry, db: channelDb })
 }
 
-function startTelegram(accessLevel: AccountAccessLevel): void {
+async function startTelegram(accessLevel: AccountAccessLevel): Promise<void> {
   insertTelegram(channelDb, {
     accountId: 'tg-acc', botToken: '1:TOKEN', botUsername: 'bot',
     workspacePath: workspace, accessLevel,
@@ -109,6 +110,8 @@ function startTelegram(accessLevel: AccountAccessLevel): void {
   seedRow(TG_SID)
   patchConfig(channelDb, 'tg-acc', { lastActiveChatId: '42' })
   tg = startTelegramChannel({ registry, db: channelDb })
+  // grammy is import()ed inside startAccount — wait for the bot to exist.
+  await vi.waitFor(() => { if (tgState.bots === 0) throw new Error('bot not started') })
 }
 
 beforeEach(() => {
@@ -121,6 +124,7 @@ beforeEach(() => {
   wxMedia.sent = []
   tgState.sent = []
   tgState.media = []
+  tgState.bots = 0
   // Wechat wire: getupdates long-polls until aborted; nothing else is hit
   // (the replies here are marker-only, so no text send).
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: { signal: AbortSignal }) => {
@@ -168,7 +172,7 @@ describe('wechat — MEDIA path whitelist by access level', () => {
 
 describe('telegram — MEDIA path whitelist by access level', () => {
   it('workspace account: an out-of-workspace path is not sent and the chat gets the upload_failed text', async () => {
-    startTelegram('workspace')
+    await startTelegram('workspace')
     emitReply(TG_SID, `MEDIA:${OUTSIDE}`)
     await tick()
 
@@ -181,7 +185,7 @@ describe('telegram — MEDIA path whitelist by access level', () => {
   })
 
   it('full account: the same path goes out as a photo, no failure text', async () => {
-    startTelegram('full')
+    await startTelegram('full')
     emitReply(TG_SID, `MEDIA:${OUTSIDE}`)
     await tick()
 

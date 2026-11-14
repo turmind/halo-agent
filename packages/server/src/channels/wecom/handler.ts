@@ -27,10 +27,10 @@
  */
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import {
-  WSClient, generateReqId,
-  type WsFrame, type BaseMessage, type ImageContent,
-  type TextMessage, type ImageMessage, type MixedMessage, type VoiceMessage, type FileMessage, type VideoMessage,
+import type {
+  WSClient,
+  WsFrame, BaseMessage, ImageContent,
+  TextMessage, ImageMessage, MixedMessage, VoiceMessage, FileMessage, VideoMessage,
 } from '@wecom/aibot-node-sdk'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
@@ -244,8 +244,11 @@ async function ingestFile(args: {
 /** One finished stream message = one chat bubble. No req_id → markdown
  *  push (`sendMessage` compat mode resolves single vs group from the id). */
 async function replyText(wsClient: WSClient, route: WecomRoute, text: string): Promise<void> {
-  if (route.reqId) await wsClient.replyStream({ headers: { req_id: route.reqId } }, generateReqId('stream'), text, true)
-  else await wsClient.sendMessage(route.chatId, { msgtype: 'markdown', markdown: { content: text } })
+  if (route.reqId) {
+    // Already loaded by connect() (a wsClient exists) — a cached module lookup.
+    const { generateReqId } = await import('@wecom/aibot-node-sdk')
+    await wsClient.replyStream({ headers: { req_id: route.reqId } }, generateReqId('stream'), text, true)
+  } else await wsClient.sendMessage(route.chatId, { msgtype: 'markdown', markdown: { content: text } })
 }
 
 /**
@@ -378,10 +381,16 @@ export function startWecomChannel(deps: {
    * failure); we own the lifecycle edges: kicked-by-newer-connection and
    * exhausted auth both leave the account dark until the next start.
    */
-  function connect(accountId: string): void {
+  async function connect(accountId: string): Promise<void> {
     const account = getAccount(db, accountId)
     if (!account || account.enabled !== 1) return
     const state = ensureState(accountId)
+    if (state.stopped || state.wsClient) return
+
+    // SDK loaded on first connect, not at module top: a server with no
+    // enabled WeCom account never loads it. The await yields: a stopAccount
+    // or a second connect may land meanwhile.
+    const { WSClient } = await import('@wecom/aibot-node-sdk')
     if (state.stopped || state.wsClient) return
 
     const wsClient = new WSClient({
@@ -428,7 +437,7 @@ export function startWecomChannel(deps: {
     if (st.wsClient) return
     const account = getAccount(db, accountId)
     if (account && account.enabled === 1) restoreReplyRoute({ registry, db, account, bridge: st.bridge })
-    connect(accountId)
+    void connect(accountId)
   }
 
   async function stopAccount(accountId: string): Promise<void> {

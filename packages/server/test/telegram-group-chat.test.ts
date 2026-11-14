@@ -94,6 +94,8 @@ beforeAll(async () => {
   })
   const { startTelegramChannel } = await import('../src/channels/telegram/handler.js')
   channel = startTelegramChannel({ registry, db })
+  // grammy is import()ed inside startAccount — wait for the bot to exist.
+  await vi.waitFor(() => { if (!state.bot) throw new Error('bot not started') })
   sm = registry.getOrCreate(workspace)
 
   const { agentSessions } = await import('../src/db/schema.js')

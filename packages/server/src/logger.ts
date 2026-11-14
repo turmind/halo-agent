@@ -17,9 +17,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { SeverityNumber } from '@opentelemetry/api-logs'
+import type { SeverityNumber } from '@opentelemetry/api-logs'
 import { config } from './config.js'
-import { enabled as otelEnabled, otelLogger } from './observability/otel.js'
+import { enabled as otelEnabled, otelLogger, apiLogs } from './observability/otel.js'
 
 const LOG_FILENAME = 'server.log'
 
@@ -102,11 +102,13 @@ function shouldLog(level: LogLevel): boolean {
   return LEVEL_ORDER[level] >= threshold
 }
 
-const OTEL_SEVERITY: Record<LogLevel, SeverityNumber> = {
-  debug: SeverityNumber.DEBUG,
-  info: SeverityNumber.INFO,
-  warn: SeverityNumber.WARN,
-  error: SeverityNumber.ERROR,
+/** SeverityNumber member per level — the enum itself is read off `apiLogs`,
+ *  which observability/otel.ts loads only once an endpoint is configured. */
+const OTEL_SEVERITY: Record<LogLevel, keyof typeof SeverityNumber> = {
+  debug: 'DEBUG',
+  info: 'INFO',
+  warn: 'WARN',
+  error: 'ERROR',
 }
 
 /** Mirror a console line to the OTel logger (no-op unless observability is
@@ -117,7 +119,7 @@ function emitOtelLog(level: LogLevel, args: unknown[]): void {
   const body = formatArgs(args)
   const module = body.match(/^\[([^\]]+)\]/)?.[1]
   otelLogger.emit({
-    severityNumber: OTEL_SEVERITY[level],
+    severityNumber: apiLogs!.SeverityNumber[OTEL_SEVERITY[level]],
     severityText: level.toUpperCase(),
     body,
     attributes: module ? { 'halo.module': module } : undefined,

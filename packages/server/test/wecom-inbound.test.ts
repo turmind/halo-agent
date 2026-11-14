@@ -6,8 +6,8 @@ import { normalizeWecomId } from '../src/channels/wecom/accounts.js'
 
 /**
  * Pure helpers of the WeCom handler — no network, no SDK instantiation.
- * `handler.ts` imports `WSClient` at module level but only constructs it
- * inside `startWecomChannel`, so importing the helpers is side-effect free.
+ * `handler.ts` imports the SDK only inside `connect()` (on the first account
+ * start), so importing the helpers is side-effect free.
  */
 
 const base = (over: Partial<BaseMessage>): BaseMessage => ({

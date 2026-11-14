@@ -18,14 +18,14 @@ import { join } from 'node:path'
  * mocked. "Restart" = a fresh registry + channel start over the same db.
  */
 
-const tgState = vi.hoisted(() => ({ sent: [] as Array<{ chatId: number | string; text: string }> }))
+const tgState = vi.hoisted(() => ({ sent: [] as Array<{ chatId: number | string; text: string }>, bots: 0 }))
 
 vi.mock('grammy', () => ({
   Bot: class {
     api = {
       sendMessage: async (chatId: number | string, text: string) => { tgState.sent.push({ chatId, text }); return {} },
     }
-    constructor(public token: string) {}
+    constructor(public token: string) { tgState.bots++ }
     catch(): void {}
     command(): void {}
     on(): void {}
@@ -75,9 +75,10 @@ vi.mock('../src/channels/feishu/api.js', () => ({
 
 // WeCom wire: the SDK client never connects; passive replies (keyed to an
 // inbound req_id) vs proactive pushes (to a chat id) recorded.
-const wcState = vi.hoisted(() => ({ sent: [] as Array<{ kind: 'reply' | 'push'; to: string; text: string }> }))
+const wcState = vi.hoisted(() => ({ sent: [] as Array<{ kind: 'reply' | 'push'; to: string; text: string }>, clients: 0 }))
 vi.mock('@wecom/aibot-node-sdk', () => ({
   WSClient: class {
+    constructor() { wcState.clients++ }
     on(): void {}
     connect(): void {}
     disconnect(): void {}
@@ -167,8 +168,10 @@ beforeEach(() => {
   feishu = null
   wecom = null
   wcState.sent = []
+  wcState.clients = 0
   wxSends = []
   tgState.sent = []
+  tgState.bots = 0
   imState.slack = []
   imState.feishu = []
   mockWechatFetch()
@@ -308,6 +311,8 @@ describe('telegram — reply route restored at account start', () => {
     seedRow('tg_42_s1')
     patchConfig(channelDb, 'tg-acc', { lastActiveChatId: '42' })
     tg = startTelegramChannel({ registry, db: channelDb })
+    // grammy is import()ed inside startAccount — wait for the bot to exist.
+    await vi.waitFor(() => { if (tgState.bots === 0) throw new Error('bot not started') })
 
     emitReply('tg_42_s1', 'resumed after restart')
     await tick()
@@ -396,6 +401,8 @@ describe('wecom — reply route restored at account start', () => {
     seedRow('wecom_alice_s1')
     patchConfig(channelDb, 'wc-acc', { lastActiveChatId: 'alice' })
     wecom = startWecomChannel({ registry, db: channelDb })
+    // The SDK is import()ed inside connect() — wait for the client to exist.
+    await vi.waitFor(() => { if (wcState.clients === 0) throw new Error('client not started') })
 
     emitReply('wecom_alice_s1', 'resumed after restart')
     await tick()
@@ -406,6 +413,8 @@ describe('wecom — reply route restored at account start', () => {
     seedRow('wecom_wr-AB_s1')
     patchConfig(channelDb, 'wc-acc', { lastActiveChatId: 'wr.AB' })
     wecom = startWecomChannel({ registry, db: channelDb })
+    // The SDK is import()ed inside connect() — wait for the client to exist.
+    await vi.waitFor(() => { if (wcState.clients === 0) throw new Error('client not started') })
 
     emitReply('wecom_wr-AB_s1', 'resumed after restart')
     await tick()
@@ -415,6 +424,8 @@ describe('wecom — reply route restored at account start', () => {
   it('no cached chat → nothing restored', async () => {
     seedRow('wecom_alice_s1')
     wecom = startWecomChannel({ registry, db: channelDb })
+    // The SDK is import()ed inside connect() — wait for the client to exist.
+    await vi.waitFor(() => { if (wcState.clients === 0) throw new Error('client not started') })
 
     emitReply('wecom_alice_s1', 'nobody listening')
     await tick()

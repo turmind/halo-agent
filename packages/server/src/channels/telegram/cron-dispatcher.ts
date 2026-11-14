@@ -20,7 +20,6 @@
  * switch — do it there, not by copying it — then adding `supportsMedia:
  * true` + a `CronMedia` 4th arg below.
  */
-import { Bot } from 'grammy'
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getTelegramAccount, listAccounts as listTelegramAccounts } from './accounts.js'
 import { TELEGRAM_TEXT_LIMIT } from './event-adapter.js'
@@ -46,6 +45,8 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   // failed the whole report. Chunks go out sequentially so a long report
   // arrives in order; a failed chunk names its index so the run row shows how
   // much already landed (chunks before it are delivered, not rolled back).
+  // grammy loaded on use, not at module top (see handler.ts startAccount).
+  const { Bot } = await import('grammy')
   const api = new Bot(acct.botToken).api
   const chunks = splitText(text, TELEGRAM_TEXT_LIMIT)
   for (const [i, chunk] of chunks.entries()) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Build a single-file ESM bundle for `@turmind/halo` and stage the
+ * Build the code-split ESM bundle for `@turmind/halo` and stage the
  * publishable layout under packages/cli/dist-pub/ (HALO_RELEASE=1) or
  * packages/cli/dist-dev/ (default — desktop staging, local tests).
  *
@@ -13,10 +13,11 @@
  *   ├── bin/
  *   │   └── halo.js    ← `#!/usr/bin/env node` shim
  *   ├── dist/
- *   │   ├── index.js     ← esbuild bundle (cli + server + core)
+ *   │   ├── index.js     ← entry (cli + server + core + their npm deps)
  *   │   ├── evo-wrapper.js ← evo wrapper entry, spawned by evolution/spawn.ts
+ *   │   ├── <name>-<hash>.js ← shared / lazily import()ed chunks, flat beside index.js
  *   │   ├── feishu-sdk.cjs ← Lark SDK + its deps, import()ed on first Feishu connect
- *   │   └── feishu-sdk.licenses.txt ← license texts of the packages inside it
+ *   │   └── third-party-licenses.txt ← license texts of every bundled package
  *   ├── templates/       ← copied from packages/server/templates/
  *   ├── bundled-docs/    ← copied from .halo/docs/ (the user-facing subset)
  *   └── admin-out/       ← copied from packages/admin/out/
@@ -26,14 +27,17 @@
  *   - bundled-docs cand = __dirname/../bundled-docs    (= dist-pub/bundled-docs)
  *   - admin-out cand    = __dirname/../admin-out       (= dist-pub/admin-out)
  *
- * Native modules (better-sqlite3, node-pty) are kept external so the user's
- * npm install can fetch the right prebuilt binaries for their platform.
+ * Every chunk sits directly in dist/, so `__dirname` is dist/ in all of them.
+ *
+ * Only native modules (+ xterm, see EXTERNAL_DEPS) stay npm dependencies, so
+ * the user's npm install fetches the right prebuilt binaries for their platform.
  */
 import { build } from 'esbuild'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { execSync } from 'node:child_process'
+import { execSync, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -110,9 +114,21 @@ lockstepVersionGate()
 
 // ── 1. esbuild bundle ──────────────────────────────────────────────────────
 //
-// Externals: any package with a native binding stays external so npm install
-// at the user's machine resolves the right prebuilt binary. Keep the list
-// short — the rest gets bundled to keep the install footprint flat.
+// Every npm dep is bundled except EXTERNAL_DEPS, which stay the published
+// package's only dependencies (ranges from server's package.json):
+// - better-sqlite3, node-pty, sherpa-onnx-node, @parcel/watcher: native
+//   bindings — npm install fetches the right prebuilt binary per platform.
+// - @xterm/headless, @xterm/addon-serialize: pure JS, but terminal-manager.ts
+//   loads them with a synchronous createRequire on the first terminal; bundled
+//   they would be either on the heap at startup or async, which changes when
+//   `terminal:start` replies.
+// A new native dep must be added here — esbuild can't bundle a `.node` binding.
+const EXTERNAL_DEPS = ['better-sqlite3', 'node-pty', 'sherpa-onnx-node', '@parcel/watcher', '@xterm/headless', '@xterm/addon-serialize']
+// Optional requires inside bundled deps (ws → bufferutil / utf-8-validate,
+// node-fetch → encoding). npm never installed them, so they stay external and
+// unresolvable: the deps' try/catch fallbacks run exactly as before.
+const OPTIONAL_UNINSTALLED = ['bufferutil', 'utf-8-validate', 'encoding']
+const EXTERNAL = [...EXTERNAL_DEPS, ...OPTIONAL_UNINSTALLED]
 
 // `react-devtools-core` is imported by `ink/build/devtools.js` at the top
 // level even though devtools UI is opt-in via env. We don't ship it. Stub
@@ -132,43 +148,126 @@ const stubReactDevtoolsPlugin = {
   },
 }
 
-// Split cli + server + core's declared deps into two lists by their version
-// range: `workspace:` ranges get INLINED by esbuild (reached through pnpm's
-// symlinks), everything else stays EXTERNAL (installed by npm at the user's
-// machine). Identify workspace packages by the range rather than a hard-coded
-// name prefix, so a rebrand of the package scope can never silently push them
-// back to external (which would leave the bundle importing a package that
-// isn't installed).
-function readDepsList() {
-  const cli    = JSON.parse(fs.readFileSync(path.join(CLI_ROOT,    'package.json'), 'utf-8'))
-  const server = JSON.parse(fs.readFileSync(path.join(SERVER_ROOT, 'package.json'), 'utf-8'))
-  const core   = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', 'core', 'package.json'), 'utf-8'))
-  const external = new Set()
+// The workspace packages among cli + server + core's declared deps (identified
+// by their `workspace:` range, not a name prefix, so a scope rebrand can't
+// miss one) — built first below, then inlined through pnpm's symlinks.
+function readWorkspaceDeps() {
   const workspace = new Set()
-  for (const pkg of [cli, server, core]) {
+  for (const dir of [CLI_ROOT, SERVER_ROOT, path.join(REPO_ROOT, 'packages', 'core')]) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
     for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {
       if (typeof range === 'string' && range.startsWith('workspace:')) workspace.add(name)
-      else external.add(name)
     }
   }
-  return { external: [...external], workspace: [...workspace] }
+  return [...workspace]
 }
 
-const { external: EXTERNAL, workspace: WORKSPACE_DEPS } = readDepsList()
+const WORKSPACE_DEPS = readWorkspaceDeps()
 
-// The Feishu SDK is bundled into its own file instead of being an npm dep: the
-// installed package is 29 MB (17 MB of it `types/`) plus protobufjs / lodash.* /
-// qs, and loading it costs ~24 MB of heap. server's channels/feishu/lark-sdk.js
-// is the only module importing its values and handler.js `import()`s it on the
-// first connect; the main build rewrites that import to `./feishu-sdk.cjs`
-// (kept external, so it stays a runtime import) and a second build bundles
-// lark-sdk.js into that file. Inlining it would put the SDK source into
-// index.js and on the heap at startup again. CJS output: the SDK reads
-// `__dirname` and `require`s its deps, which an ESM output lacks.
+// A bundled package that reads its own package.json finds the halo package's
+// (or nothing) once it lives in dist/. Replace that read with the values from
+// the package's real package.json at build time — same result as unbundled,
+// following every upgrade — and fail when the code moves instead of silently
+// shipping a different value.
+function pinOwnPackageJson({ pkgName, file, find, replace }) {
+  const pin = {
+    applied: false,
+    plugin: {
+      name: `pin-package-json:${pkgName}`,
+      setup(b) {
+        b.onLoad({ filter: file }, (args) => {
+          let dir = path.dirname(args.path)
+          while (!fs.existsSync(path.join(dir, 'package.json'))) dir = path.dirname(dir)
+          const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
+          const src = fs.readFileSync(args.path, 'utf-8')
+          if (pkg.name !== pkgName || src.split(find).length !== 2) {
+            throw new Error(`${args.path}: \`${find}\` not found once — re-check how ${pkgName} reads its package.json`)
+          }
+          pin.applied = true
+          return { contents: src.replace(find, replace(pkg)), loader: 'js' }
+        })
+      },
+    },
+  }
+  return pin
+}
+// With splitting, esbuild turns an `import()` of a CommonJS module into a chunk
+// whose only export is `default`, while Node's own import() also exposes the
+// named exports its cjs-module-lexer finds — so `const { trace } = await
+// import('@opentelemetry/api')` (and the aws credential chain's `await
+// import('@smithy/credential-provider-imds')`) got undefined. Route each such
+// import through a wrapper that re-exports exactly the names Node exposes for
+// that file, read by import()ing it in a child node process. `default` is
+// `module.exports`, as in Node; the wrapper's require() shares the module's one
+// instance with any static importer. A probe that fails fails the build.
+const execFileP = promisify(execFile)
+const NAMES_PROBE = `import { pathToFileURL } from 'node:url'
+const ns = await import(pathToFileURL(process.argv[1]).href)
+process.stdout.write(JSON.stringify(Object.keys(ns)))
+process.exit(0)`
+// Node's own rule: .cjs, or .js under a package.json without "type": "module".
+function isCommonJs(abs) {
+  if (abs.endsWith('.cjs')) return true
+  if (!abs.endsWith('.js')) return false
+  for (let dir = path.dirname(abs); ; dir = path.dirname(dir)) {
+    const pj = path.join(dir, 'package.json')
+    if (fs.existsSync(pj)) return JSON.parse(fs.readFileSync(pj, 'utf-8')).type !== 'module'
+    if (path.dirname(dir) === dir) return true
+  }
+}
+const cjsNamesCache = new Map()
+const cjsNames = (abs) => {
+  if (!cjsNamesCache.has(abs)) {
+    cjsNamesCache.set(abs, execFileP(process.execPath, ['--input-type=module', '-e', NAMES_PROBE, abs], { timeout: 30_000 })
+      .then(({ stdout }) => JSON.parse(stdout)))
+  }
+  return cjsNamesCache.get(abs)
+}
+const cjsDynamicImportPlugin = {
+  name: 'cjs-dynamic-import-names',
+  setup(b) {
+    b.onResolve({ filter: /.*/ }, async (args) => {
+      if (args.kind !== 'dynamic-import' || args.pluginData?.cjsProbe) return undefined
+      const r = await b.resolve(args.path, { kind: args.kind, importer: args.importer, resolveDir: args.resolveDir, pluginData: { cjsProbe: true } })
+      if (r.errors.length > 0 || r.external || !r.path.includes(`${path.sep}node_modules${path.sep}`) || !isCommonJs(r.path)) return undefined
+      return { path: r.path, namespace: 'cjs-names', pluginData: await cjsNames(r.path) }
+    })
+    b.onLoad({ filter: /.*/, namespace: 'cjs-names' }, (args) => {
+      const named = args.pluginData.filter((n) => n !== 'default')
+      return {
+        contents: [
+          `const m = require(${JSON.stringify(args.path)})`,
+          'export default m',
+          ...named.map((n, i) => `var n${i} = m[${JSON.stringify(n)}]; export { n${i} as ${JSON.stringify(n)} }`),
+        ].join('\n'),
+        resolveDir: path.dirname(args.path),
+        loader: 'js',
+      }
+    })
+  },
+}
+
+// ink reads `../package.json` for its devtools renderer name/version, only when
+// DEV=true (which also tries to load the uninstalled react-devtools-core).
+const inkPackagePin = pinOwnPackageJson({
+  pkgName: 'ink',
+  file: /[\\/]ink[\\/]build[\\/]reconciler\.js$/,
+  find: "const content = fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8');",
+  replace: (pkg) => `const content = ${JSON.stringify(JSON.stringify({ name: pkg.name, version: pkg.version }))};`,
+})
+
+// The Feishu SDK gets its own file instead of a chunk of the main build: it is
+// CJS-only in spirit (reads `__dirname`, `require`s its deps), and as a split
+// chunk it would share modules (axios, form-data, …) with other chunks and
+// pull them all in — measured 4.6 MB vs 0.7 MB standalone. server's
+// channels/feishu/lark-sdk.js is the only module importing its values and
+// handler.js `import()`s it on the first connect; the main build rewrites that
+// import to `./feishu-sdk.cjs` (kept external, so it stays a runtime import)
+// and a second build bundles lark-sdk.js with all its deps (ws included) into
+// that file.
 const LARK_SDK = '@larksuiteoapi/node-sdk'
 const FEISHU_SDK_SRC = path.join(SERVER_ROOT, 'dist', 'channels', 'feishu', 'lark-sdk.js')
 const FEISHU_SDK_OUT = './feishu-sdk.cjs'
-const MAIN_EXTERNAL = EXTERNAL.filter((n) => n !== LARK_SDK)
 const feishuSdkExternalPlugin = {
   name: 'feishu-sdk-external',
   setup(b) {
@@ -177,26 +276,13 @@ const feishuSdkExternalPlugin = {
   },
 }
 // The SDK builds its User-Agent (`oapi-node-sdk/<version>`) from getSdkVersion(),
-// which reads `__dirname/../package.json` — absent once bundled, so it fell back
-// to `unknown`. Pin the version read from the SDK's own package.json at build
-// time, so it follows every SDK upgrade. Fail when the function moves rather
-// than silently shipping `unknown` again.
-let larkSdkVersionPinned = false
-const larkSdkVersionPlugin = {
-  name: 'lark-sdk-version',
-  setup(b) {
-    b.onLoad({ filter: /[\\/]@larksuiteoapi[\\/]node-sdk[\\/]es[\\/]index\.js$/ }, (args) => {
-      const pkg = JSON.parse(fs.readFileSync(path.join(path.dirname(args.path), '..', 'package.json'), 'utf-8'))
-      const src = fs.readFileSync(args.path, 'utf-8')
-      const head = 'function getSdkVersion() {'
-      if (pkg.name !== LARK_SDK || src.split(head).length !== 2) {
-        throw new Error(`${args.path}: getSdkVersion() not found once — re-check how the SDK reads its version`)
-      }
-      larkSdkVersionPinned = true
-      return { contents: src.replace(head, `${head}\n    return ${JSON.stringify(pkg.version)};`), loader: 'js' }
-    })
-  },
-}
+// which reads `__dirname/../package.json` and fell back to `unknown` once bundled.
+const larkSdkVersionPin = pinOwnPackageJson({
+  pkgName: LARK_SDK,
+  file: /[\\/]@larksuiteoapi[\\/]node-sdk[\\/]es[\\/]index\.js$/,
+  find: 'function getSdkVersion() {',
+  replace: (pkg) => `function getSdkVersion() {\n    return ${JSON.stringify(pkg.version)};`,
+})
 
 // esbuild resolves each inlined `workspace:*` dep through its package.json
 // "main" (= dist/, the tsc output), NOT its TS source. So a stale or missing
@@ -239,31 +325,34 @@ function gitVersion() {
 const PKG_VERSION = IS_RELEASE ? BASE_VERSION : gitVersion()
 console.log(`[build-bundle] version: ${PKG_VERSION}${IS_RELEASE ? ' (release)' : ''}`)
 
-// Output an ESM bundle. We only bundle our own source (the workspace
-// packages); every npm dep (Hono, aws-sdk, ink, drizzle, etc.) stays external
-// and gets installed by `npm install` at the user's machine.
+// ESM output with code splitting: the workspace packages and their npm deps
+// are bundled, and every `import()` in the source becomes its own chunk, so a
+// dep reached only through a lazy import (TUI, OTel, Telegram, WeCom, jimp, …)
+// is still read from disk only when that path runs — as it was from
+// node_modules. Loading the server pulls in only its static import graph.
 //
-// Why not bundle deps:
-// - Dynamic `require('buffer')` inside transitive cjs deps (aws-smithy chain)
-//   breaks under esbuild's ESM-from-CJS shim.
-// - Several deps use `import.meta.url` natively, which only round-trips
-//   correctly when the consumer is also ESM.
-// - Bundling 50+MB of aws-sdk doesn't speed install — npm dedupes anyway.
-//
-// What we DO bundle: the three workspace packages (`@turmind/halo-cli`,
-// `@turmind/halo-server`, `@turmind/halo-core`) so the user gets a single entry file.
-// Their imports of bare-name third-party packages stay as imports and
-// resolve at runtime.
+// What keeps the deps' runtime behavior unchanged:
+// - `conditions: []` drops esbuild's default `module` condition, so each
+//   package resolves to the same file Node picks (`node` / `import` /
+//   `default`) — e.g. @smithy/core's dist-cjs and @opentelemetry/api's
+//   build/src rather than their ESM builds. Costs ~4 MB of less-shaken CJS.
+// - The banner gives every chunk a real `require`, which esbuild's CJS shim
+//   uses for `require('buffer')`-style calls in bundled CJS deps (without it
+//   they throw "Dynamic require of … is not supported").
+// - `__dirname` is not defined: the CJS deps that read it either guard on
+//   `typeof __dirname` (@aws-sdk/util-user-agent-node) or only print it.
+// - No `process.env.NODE_ENV` define: react still picks its build at runtime.
 // Hard timeout — if esbuild hangs, abort within 60s rather than burn CPU.
 const TIMEOUT_MS = 60_000
 // Second entry: the evo wrapper. The server spawns it as its own process
 // (`node <dir of spawn.ts's code>/evo-wrapper.js`, evolution/spawn.ts), which
 // in the bundle means `dist/evo-wrapper.js` beside index.js. Without it every
 // evo run on an npm install died at `Cannot find module` and timed out
-// (1.6.0–2.0.4). Bundled from server's tsc output like the rest; each entry is
-// self-contained (no splitting), so `import.meta.url` in the wrapper is its own
-// file and its `argv[1] === import.meta.url` entry guard holds.
+// (1.6.0–2.0.4). Its `argv[1] === import.meta.url` entry guard holds only while
+// the wrapper module's own code lands in evo-wrapper.js, not a shared chunk —
+// checked after the build.
 const EVO_WRAPPER_SRC = path.join(SERVER_ROOT, 'dist', 'evolution', 'evo-wrapper.js')
+const DIST_DIR = path.join(PUB_DIR, 'dist')
 const buildPromise = Promise.all([build({
   entryPoints: {
     index: path.join(CLI_ROOT, 'src', 'index.ts'),
@@ -273,31 +362,36 @@ const buildPromise = Promise.all([build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
-  outdir: path.join(PUB_DIR, 'dist'),
-  external: MAIN_EXTERNAL,
+  splitting: true,
+  outdir: DIST_DIR,
+  // Flat in dist/: init.ts, spawn.ts and server/index.ts resolve templates/,
+  // evo-wrapper.js and admin-out/ from their chunk's own directory.
+  chunkNames: '[name]-[hash]',
+  conditions: [],
+  external: EXTERNAL,
+  banner: { js: "import { createRequire as __haloCreateRequire } from 'node:module'; const require = __haloCreateRequire(import.meta.url);" },
   define: {
     'process.env.HALO_VERSION': JSON.stringify(PKG_VERSION),
   },
-  plugins: [stubReactDevtoolsPlugin, feishuSdkExternalPlugin],
+  plugins: [stubReactDevtoolsPlugin, feishuSdkExternalPlugin, inkPackagePin.plugin, cjsDynamicImportPlugin],
   sourcemap: false,
   legalComments: 'none',
   logLevel: 'info',
   metafile: true,
 }), build({
-  // Third entry: dist/feishu-sdk.cjs (see LARK_SDK above). Deps the published
-  // package.json declares (ws) stay external; the SDK's own (axios, protobufjs,
-  // lodash.*, qs) are bundled. `module` first: the SDK's ESM build tree-shakes
-  // down to the three exports lark-sdk.js names, its CJS `main` doesn't.
+  // Third entry: dist/feishu-sdk.cjs (see LARK_SDK above), with every dep but
+  // the natives bundled. `module` first: the SDK's ESM build tree-shakes down
+  // to the three exports lark-sdk.js names, its CJS `main` doesn't.
   entryPoints: { 'feishu-sdk': FEISHU_SDK_SRC },
   bundle: true,
   platform: 'node',
   format: 'cjs',
   target: 'node22',
-  outdir: path.join(PUB_DIR, 'dist'),
+  outdir: DIST_DIR,
   outExtension: { '.js': '.cjs' },
-  external: MAIN_EXTERNAL,
+  external: EXTERNAL,
   mainFields: ['module', 'main'],
-  plugins: [larkSdkVersionPlugin],
+  plugins: [larkSdkVersionPin.plugin],
   sourcemap: false,
   legalComments: 'none',
   logLevel: 'info',
@@ -313,38 +407,79 @@ timer.unref()
 const [mainResult, feishuSdkResult] = await buildPromise
 clearTimeout(timer)
 
-if (!fs.existsSync(path.join(PUB_DIR, 'dist', 'evo-wrapper.js'))) {
-  console.error('[build-bundle] FATAL: dist/evo-wrapper.js missing — every evo run would fail with `Cannot find module` and time out.')
+const fatal = (msg) => {
+  console.error(`[build-bundle] FATAL: ${msg}`)
   process.exit(1)
 }
-// The SDK is no longer external, so if the lark-sdk.js rewrite ever stops
-// matching, esbuild silently inlines the whole SDK into index.js — back to
-// loading it on every start. Fail instead.
+const mainOutputs = mainResult.metafile.outputs
+const outputKey = (pred) => Object.keys(mainOutputs).find(pred)
+const evoKey = outputKey((k) => path.resolve(k) === path.join(DIST_DIR, 'evo-wrapper.js'))
+if (!evoKey) fatal('dist/evo-wrapper.js missing — every evo run would fail with `Cannot find module` and time out.')
+if (!Object.keys(mainOutputs[evoKey].inputs).some((p) => path.resolve(p) === EVO_WRAPPER_SRC)) {
+  fatal('evo-wrapper.js\'s own module landed in a shared chunk — its `argv[1] === import.meta.url` entry guard would never hold.')
+}
+// If the lark-sdk.js rewrite ever stops matching, esbuild silently inlines the
+// whole SDK into a main-build chunk. Fail instead.
 const inlinedSdk = Object.keys(mainResult.metafile.inputs).filter((p) => p.includes(LARK_SDK) || p.endsWith('/lark-sdk.js'))
-if (inlinedSdk.length > 0) {
-  console.error(`[build-bundle] FATAL: the Feishu SDK got inlined into the main bundle (${inlinedSdk[0]}) — the lark-sdk.js → ${FEISHU_SDK_OUT} rewrite didn't match.`)
-  process.exit(1)
-}
-if (!larkSdkVersionPinned) {
-  console.error(`[build-bundle] FATAL: ${FEISHU_SDK_OUT} was built without the SDK's es/index.js — its User-Agent version pin never applied.`)
-  process.exit(1)
+if (inlinedSdk.length > 0) fatal(`the Feishu SDK got inlined into the main build (${inlinedSdk[0]}) — the lark-sdk.js → ${FEISHU_SDK_OUT} rewrite didn't match.`)
+for (const [pin, what] of [[larkSdkVersionPin, `${FEISHU_SDK_OUT}'s User-Agent version`], [inkPackagePin, 'ink\'s package.json read']]) {
+  if (!pin.applied) fatal(`the pin for ${what} never applied — the file it patches was not bundled.`)
 }
 
-// The bundled packages' own LICENSE files no longer reach node_modules, and
-// several (protobufjs, qs) carry no in-source license comment for esbuild to
-// keep — ship their texts beside the bundle.
-const sdkPkgDirs = new Set()
-for (const p of Object.keys(feishuSdkResult.metafile.inputs)) {
-  const m = /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//.exec(p)
-  if (m) sdkPkgDirs.add(path.resolve(m[1]))
+// Lazy-load gate: these deps are reached only through an `import()` on the path
+// that needs them (TUI, a channel's first connect, an OTel endpoint, an image
+// tool call). A static import added anywhere on the startup path would make
+// esbuild hoist them into a chunk loaded on every start — invisible except on
+// the heap. Walk the static-import closure of the entry and the server chunk.
+const LAZY_DEPS = /^(@opentelemetry\/.*|@wecom\/aibot-node-sdk|grammy|@grammyjs\/.*|qrcode|ink|ink-spinner|react|react-dom|react-reconciler|marked|marked-terminal|jimp|@jimp\/.*)$/
+const pkgOf = (input) => /node_modules\/((?:@[^/]+\/)?[^/]+)\/(?!.*node_modules\/)/.exec(input)?.[1]
+function staticClosure(key) {
+  const seen = new Set()
+  const stack = [key]
+  while (stack.length) {
+    const k = stack.pop()
+    if (seen.has(k)) continue
+    seen.add(k)
+    for (const i of mainOutputs[k].imports) if (i.kind === 'import-statement' && !i.external) stack.push(i.path)
+  }
+  return seen
 }
-const licenseTexts = [...sdkPkgDirs].sort().map((dir) => {
-  const { name, version } = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
-  const file = fs.readdirSync(dir).find((f) => /^licen[cs]e/i.test(f))
-  return `${name}@${version}\n\n${file ? fs.readFileSync(path.join(dir, file), 'utf-8').trim() : '(no license file in package)'}\n`
-})
-fs.writeFileSync(path.join(PUB_DIR, 'dist', 'feishu-sdk.licenses.txt'), licenseTexts.join(`\n${'-'.repeat(72)}\n\n`), 'utf-8')
-console.log(`[build-bundle] bundled dist/index.js + dist/evo-wrapper.js + dist/feishu-sdk.cjs (${sdkPkgDirs.size} packages)`)
+const SERVER_ENTRY_SRC = path.join(SERVER_ROOT, 'dist', 'index.js')
+const startupRoots = [
+  ['index.js', outputKey((k) => path.resolve(k) === path.join(DIST_DIR, 'index.js'))],
+  ['the server chunk', outputKey((k) => mainOutputs[k].entryPoint && path.resolve(mainOutputs[k].entryPoint) === SERVER_ENTRY_SRC)],
+]
+for (const [label, root] of startupRoots) {
+  if (!root) fatal(`no output for ${label} in the metafile — the lazy-load gate can't run.`)
+  const hoisted = new Set()
+  for (const k of staticClosure(root)) {
+    for (const input of Object.keys(mainOutputs[k].inputs)) {
+      const pkg = pkgOf(input)
+      if (pkg && LAZY_DEPS.test(pkg)) hoisted.add(pkg)
+    }
+  }
+  if (hoisted.size > 0) fatal(`${[...hoisted].sort().join(', ')} statically reachable from ${label} — some startup-path module imports them without import().`)
+}
+
+// The bundled packages' own LICENSE / NOTICE files no longer reach
+// node_modules, and many carry no in-source license comment for esbuild to
+// keep — ship their texts beside the bundle.
+const bundledPkgDirs = new Set()
+for (const p of [...Object.keys(mainResult.metafile.inputs), ...Object.keys(feishuSdkResult.metafile.inputs)]) {
+  if (p.startsWith('cjs-names:')) continue // wrapper of a file input listed on its own
+  const m = /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\/(?!.*node_modules\/)/.exec(p)
+  if (m) bundledPkgDirs.add(path.resolve(m[1]))
+}
+const licenseTexts = [...bundledPkgDirs].map((dir) => {
+  const { name, version, license } = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
+  const files = fs.readdirSync(dir).filter((f) => /^(licen[cs]e|notice|copying|copyrightnotice)/i.test(f)).sort()
+  const body = files.length > 0
+    ? files.map((f) => fs.readFileSync(path.join(dir, f), 'utf-8').trim()).join('\n\n')
+    : `(no license file in package; package.json license: ${typeof license === 'string' ? license : JSON.stringify(license)})`
+  return { id: `${name}@${version}`, text: `${name}@${version}\n\n${body}\n` }
+}).sort((a, b) => a.id.localeCompare(b.id))
+fs.writeFileSync(path.join(DIST_DIR, 'third-party-licenses.txt'), licenseTexts.map((l) => l.text).join(`\n${'-'.repeat(72)}\n\n`), 'utf-8')
+console.log(`[build-bundle] bundled ${Object.keys(mainOutputs).length} files + dist/feishu-sdk.cjs (${bundledPkgDirs.size} third-party packages)`)
 
 // ── 2. bin shim ────────────────────────────────────────────────────────────
 // Silence two always-noise Node warnings that transitive deps trigger on
@@ -496,27 +631,14 @@ if (fs.existsSync(adminOut)) {
 
 const cliPkg = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'package.json'), 'utf-8'))
 
-// Read native deps' versions from cli or server package.json so the published
-// package depends on them with the right ranges.
+// Runtime dependencies: exactly EXTERNAL_DEPS (the bundle leaves them as
+// imports), with server's declared ranges.
 const serverPkg = JSON.parse(fs.readFileSync(path.join(SERVER_ROOT, 'package.json'), 'utf-8'))
-
-// Runtime dependencies: every npm dep the bundle leaves external must be
-// installable by the user's `npm install`. Merge cli + server + core's deps,
-// dedupe by name (pick the latest range — they should match in monorepo).
-function mergeDeps(pkgs) {
-  const out = {}
-  for (const pkg of pkgs) {
-    for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {
-      if (range.startsWith('workspace:')) continue   // skip workspace refs
-      if (name === LARK_SDK) continue                // bundled into dist/feishu-sdk.cjs
-      out[name] = range
-    }
-  }
-  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)))
-}
-
-const corePkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', 'core', 'package.json'), 'utf-8'))
-const dependencies = mergeDeps([cliPkg, serverPkg, corePkg])
+const dependencies = Object.fromEntries(EXTERNAL_DEPS.map((name) => {
+  const range = serverPkg.dependencies?.[name]
+  if (!range) fatal(`external dep ${name} is not in packages/server/package.json dependencies.`)
+  return [name, range]
+}).sort(([a], [b]) => a.localeCompare(b)))
 
 const pubPkg = {
   name: '@turmind/halo',
@@ -598,7 +720,8 @@ function fmt(bytes) {
 console.log('')
 console.log(`[build-bundle] DONE — staged at packages/cli/${OUT_NAME}/`)
 console.log(`  total size:    ${fmt(dirSize(PUB_DIR))}`)
-console.log(`  bundle:        ${fmt(fs.statSync(path.join(PUB_DIR, 'dist', 'index.js')).size)}`)
+console.log(`  dist/:         ${fmt(dirSize(DIST_DIR))} (${fs.readdirSync(DIST_DIR).length} files; index.js ${fmt(fs.statSync(path.join(DIST_DIR, 'index.js')).size)})`)
+console.log(`  dependencies:  ${Object.keys(dependencies).join(', ')}`)
 console.log(`  templates:     ${fmt(dirSize(path.join(PUB_DIR, 'templates')))}`)
 console.log(`  bundled-docs:  ${fmt(dirSize(path.join(PUB_DIR, 'bundled-docs')))}`)
 console.log(`  admin-out:     ${fmt(dirSize(path.join(PUB_DIR, 'admin-out')))}`)

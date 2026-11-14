@@ -1,5 +1,4 @@
 import { Hono } from 'hono'
-import { Bot } from 'grammy'
 import type { ChannelDb } from '../db/channel-db.js'
 import type { TelegramChannel } from '../channels/telegram/handler.js'
 import {
@@ -38,6 +37,8 @@ export function createTelegramRoutes(deps: { db: ChannelDb; channel: TelegramCha
     // Validate token by calling getMe
     let botUsername: string
     try {
+      // grammy loaded on use, not at module top (see channels/telegram/handler.ts).
+      const { Bot } = await import('grammy')
       const bot = new Bot(body.botToken)
       const me = await bot.api.getMe()
       botUsername = me.username

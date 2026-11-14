@@ -27,15 +27,15 @@ const metricReader = new PeriodicExportingMetricReader({ exporter: metricExporte
 // config is `as const` at the type level but a plain object at runtime.
 const observability = config.observability as { captureContent: boolean }
 
-beforeAll(() => {
+beforeAll(async () => {
   trace.setGlobalTracerProvider(new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spanExporter)] }))
   metrics.setGlobalMeterProvider(new MeterProvider({ readers: [metricReader] }))
   _resetInstrumentsForTests()
-  _setEnabledForTests(true)
+  await _setEnabledForTests(true)
 })
 
-afterAll(() => {
-  _setEnabledForTests(false)
+afterAll(async () => {
+  await _setEnabledForTests(false)
   trace.disable()
   metrics.disable()
 })
@@ -292,13 +292,13 @@ describe('genai-spans: span tree', () => {
     expect(turn.dataPoints.some((d) => d.attributes.outcome === 'error')).toBe(true) // from (e)
   })
 
-  it('disabled gate: no spans when observability is off', () => {
-    _setEnabledForTests(false)
+  it('disabled gate: no spans when observability is off', async () => {
+    await _setEnabledForTests(false)
     try {
       runOneToolTurn(makeSession())
       expect(spanExporter.getFinishedSpans()).toHaveLength(0)
     } finally {
-      _setEnabledForTests(true)
+      await _setEnabledForTests(true)
     }
   })
 })

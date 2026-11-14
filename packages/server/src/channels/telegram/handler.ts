@@ -1,4 +1,4 @@
-import { Bot, InputFile } from 'grammy'
+import type { Bot } from 'grammy'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
 import { listEnabledAccounts, getAccount, updateAccount } from './accounts.js'
@@ -19,7 +19,8 @@ interface TgRoute {
 
 interface AccountRunner {
   accountId: string
-  bot: InstanceType<typeof Bot>
+  /** Resolves once grammy is loaded and the Bot built (see startAccount). */
+  bot: Promise<InstanceType<typeof Bot>>
   abort: AbortController
   promise: Promise<void>
   bridge: InboundBridge<TgRoute>
@@ -166,18 +167,24 @@ export function startTelegramChannel(deps: {
         void stopAccount(accountId).then(() => { startAccount(accountId) })
       })
     }
-    const bot = new Bot(account.botToken)
+    // grammy is loaded on the first account start, not at module top, so a
+    // server with no enabled Telegram account never loads it. The rest of this
+    // function stays synchronous as before (runner registered, reply route
+    // restored); only building the Bot waits for the import, and sends await it.
+    const ready = import('grammy').then(({ Bot, InputFile }) => ({ bot: new Bot(account.botToken), InputFile }))
+    const bot = ready.then((r) => r.bot)
     const bridge: InboundBridge<TgRoute> = new InboundBridge({
       channel: 'telegram',
       makeResponder: (sessionId) => new TelegramResponder({
         sendText: async (chunk) => {
           const route = bridge.getRoute(sessionId)
           if (!route) return
-          await bot.api.sendMessage(route.chatId, chunk, { parse_mode: undefined })
+          await (await bot).api.sendMessage(route.chatId, chunk, { parse_mode: undefined })
         },
         sendMedia: async (filePath) => {
           const route = bridge.getRoute(sessionId)
           if (!route) return
+          const { bot: b, InputFile } = await ready
           // A blocked path or a failed upload is reported to the chat as
           // upload_failed (like slack / feishu / wecom) instead of only a
           // server log line.
@@ -187,19 +194,21 @@ export function startTelegramChannel(deps: {
               const kind = inferMediaKind(filePath)
               const file = new InputFile(filePath)
               switch (kind) {
-                case 'photo': await bot.api.sendPhoto(route.chatId, file); break
-                case 'video': await bot.api.sendVideo(route.chatId, file); break
-                case 'voice': await bot.api.sendVoice(route.chatId, file); break
-                case 'document': await bot.api.sendDocument(route.chatId, file); break
+                case 'photo': await b.api.sendPhoto(route.chatId, file); break
+                case 'video': await b.api.sendVideo(route.chatId, file); break
+                case 'voice': await b.api.sendVoice(route.chatId, file); break
+                case 'document': await b.api.sendDocument(route.chatId, file); break
               }
             },
-            reply: (text) => bot.api.sendMessage(route.chatId, text),
+            reply: (text) => b.api.sendMessage(route.chatId, text),
           })
         },
       }),
     })
     restoreReplyRoute({ registry, db, account, bridge })
-    const promise = runBot({ registry, db, account, bot, abort, bridge, activeOverrides, restartSelf })
+    // A stop that lands before the import resolves has already aborted: never start polling then.
+    const promise = bot
+      .then((b) => abort.signal.aborted ? undefined : runBot({ registry, db, account, bot: b, abort, bridge, activeOverrides, restartSelf }))
       .catch((err) => console.log(`[Telegram] account ${accountId} bot crashed: ${String(err)}`))
     runners.set(accountId, { accountId, bot, abort, promise, bridge, activeOverrides })
     console.log(`[Telegram] account ${accountId} started (@${account.botUsername}, workspace=${account.workspacePath})`)
@@ -210,7 +219,7 @@ export function startTelegramChannel(deps: {
     if (!runner) return
     runner.abort.abort()
     runner.bridge.closeAll()
-    runner.bot.stop()
+    void runner.bot.then((b) => b.stop(), () => { /* never built — runner.promise logged why */ })
     runners.delete(accountId)
     await runner.promise.catch(() => {})
     console.log(`[Telegram] account ${accountId} stopped`)

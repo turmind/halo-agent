@@ -93,8 +93,12 @@ function buildCtx(message: Record<string, unknown>) {
 }
 
 async function fire(event: string, ctx: unknown): Promise<void> {
-  const handler = grammyState.handlers.get(event)
-  if (!handler) throw new Error(`no handler registered for ${event}`)
+  // grammy is import()ed inside startAccount — wait for runBot to register.
+  const handler = await vi.waitFor(() => {
+    const h = grammyState.handlers.get(event)
+    if (!h) throw new Error(`no handler registered for ${event}`)
+    return h
+  })
   await handler(ctx)
   // handleUserMessage fires sendUserMessage without awaiting — give the
   // enqueue a couple of macrotask hops to land before asserting.

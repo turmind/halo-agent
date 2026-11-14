@@ -1,18 +1,18 @@
 /**
  * OpenTelemetry bootstrap. Everything else in the server (genai-spans.ts,
  * logger.ts) talks only to the `@opentelemetry/api` / `@opentelemetry/api-logs`
- * proxies, which stay no-op until a provider is registered here. The SDK +
- * OTLP exporters live in otel-sdk.ts and are dynamically imported only when an
- * endpoint is configured — an unconfigured process (server, `halo cli`,
- * `halo tui`) never loads them.
+ * proxies, which stay no-op until a provider is registered here. Both api
+ * packages, and the SDK + OTLP exporters in otel-sdk.ts, are dynamically
+ * imported only when an endpoint is configured — an unconfigured process
+ * (server, `halo cli`, `halo tui`) loads no OpenTelemetry package at all.
  *
  * Vendor-neutral by design: the three signals leave over OTLP http/protobuf to
  * whatever collector `general.observability.endpoint` points at. Config keys are
  * mapped onto the standard `OTEL_*` env vars with `??=` so an operator who
  * already exports them (or `--require`s an external distro) wins.
  */
-import { trace, metrics, ProxyTracerProvider, type Meter } from '@opentelemetry/api'
-import { logs } from '@opentelemetry/api-logs'
+import type { Meter, Tracer } from '@opentelemetry/api'
+import type { Logger } from '@opentelemetry/api-logs'
 import { config } from '../config.js'
 import { settingsOtelEnvKeys } from '../child-env.js'
 import type { Provider } from './otel-sdk.js'
@@ -33,21 +33,38 @@ const SHUTDOWN_CAP_MS = 3_000
 
 /** True once initObservability() found an endpoint (ours or an external
  *  SDK's). The hot-path hooks gate on this single boolean so an unconfigured
- *  server pays nothing beyond the check. */
+ *  server pays nothing beyond the check. Only ever true after loadApi(), so
+ *  code behind the gate may use `api` / `apiLogs` / `tracer` / `otelLogger`. */
 export let enabled = false
 
-/** Test-only: flip the gate without going through env / config. */
-export function _setEnabledForTests(value: boolean): void {
-  enabled = value
-}
+/** The `@opentelemetry/api` / `api-logs` modules — null until an endpoint is
+ *  configured (they are imported in loadApi(), never at module top: the npm
+ *  bundle would otherwise load them on every start). */
+export let api: typeof import('@opentelemetry/api') | null = null
+export let apiLogs: typeof import('@opentelemetry/api-logs') | null = null
 
 // Tracer / logger come back as api proxies that pick up the real provider once
 // it's registered. The metrics api has NO proxy: a Meter fetched before
 // setGlobalMeterProvider() is a permanent no-op, so callers resolve the meter
 // lazily (see genai-spans.ts) instead of at import time.
-export const tracer = trace.getTracer(SCOPE, '1')
-export const getMeter = (): Meter => metrics.getMeter(SCOPE, '1')
-export const otelLogger = logs.getLogger(SCOPE, '1')
+export let tracer: Tracer
+export let otelLogger: Logger
+export const getMeter = (): Meter => api!.metrics.getMeter(SCOPE, '1')
+
+async function loadApi(): Promise<void> {
+  if (api) return
+  const [traceApi, logsApi] = await Promise.all([import('@opentelemetry/api'), import('@opentelemetry/api-logs')])
+  tracer = traceApi.trace.getTracer(SCOPE, '1')
+  otelLogger = logsApi.logs.getLogger(SCOPE, '1')
+  api = traceApi
+  apiLogs = logsApi
+}
+
+/** Test-only: flip the gate without going through env / config. */
+export async function _setEnabledForTests(value: boolean): Promise<void> {
+  if (value) await loadApi()
+  enabled = value
+}
 
 export const captureContent = (): boolean => config.observability.captureContent
 
@@ -58,6 +75,7 @@ let providers: Provider[] = []
  *  provider. A fresh ProxyTracerProvider's delegate is the shared NoopTracerProvider
  *  singleton, so comparing against it tells no-op from "someone's already here". */
 function externalSdkRegistered(): boolean {
+  const { trace, ProxyTracerProvider } = api!
   const provider = trace.getTracerProvider()
   if (!(provider instanceof ProxyTracerProvider)) return true // registered directly, not via the api's proxy
   return provider.getDelegate() !== new ProxyTracerProvider().getDelegate()
@@ -88,6 +106,7 @@ export async function initObservability(haloProcess: HaloProcess = 'server'): Pr
   setFromSettings('OTEL_EXPORTER_OTLP_PROTOCOL', 'http/protobuf')
 
   if (!process.env.OTEL_EXPORTER_OTLP_ENDPOINT) return false
+  await loadApi()
   enabled = true
 
   if (externalSdkRegistered()) {

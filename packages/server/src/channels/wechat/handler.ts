@@ -20,7 +20,6 @@ import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { assertMediaPathAllowed, tempDir } from '../shared/media.js'
 import { sendMediaFile } from './send-media.js'
 import { startLogin, waitLogin } from './login.js'
-import QRCode from 'qrcode'
 import { findActiveSessionId as sharedFindActive, type CommandContext } from '../shared/commands.js'
 import { InboundBridge, deliverInbound, dispatchChannelCommand, restoreChannelRoute, type RouteInit } from '../shared/inbound.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
@@ -553,6 +552,8 @@ async function handleSlashCommand(args: {
         return true
       }
       const tmpPath = path.join(tempDir(), `halo-qr-${login.sessionKey}.png`)
+      // Loaded here, the only caller: an idle server never loads qrcode.
+      const { default: QRCode } = await import('qrcode')
       await QRCode.toFile(tmpPath, login.qrcodeUrl, { width: 256, margin: 2 })
       await sendMediaFile({
         baseUrl: account.baseUrl, token: account.botToken,
