@@ -112,13 +112,14 @@ export function assetMime(fileName: string): string {
  * the param, so `rest` can arrive as `../../x` — the segment check runs
  * BEFORE any path.join, and a realpath prefix check guards symlinks.
  * Switched off still serves (see the header); an unconfirmed backend only
- * its declared icons → 'unconfirmed'.
+ * its declared icons (`unconfirmedIcon`), anything else → 'unconfirmed'.
  */
-export function resolveAsset(id: string, version: string, rest: string): string | 'unconfirmed' | null {
+export function resolveAsset(id: string, version: string, rest: string): { file: string; unconfirmedIcon: boolean } | 'unconfirmed' | null {
   if (!isExtensionId(id)) return null
   const info = getInstalledExtension(id)
   if (!info || info.version !== version) return null
-  if (info.backend && !info.backend.confirmed && rest !== info.activity?.icon && rest !== info.chatbar?.icon) return 'unconfirmed'
+  const unconfirmed = !!info.backend && !info.backend.confirmed
+  if (unconfirmed && rest !== info.activity?.icon && rest !== info.chatbar?.icon) return 'unconfirmed'
   const segments = rest.split('/')
   if (segments.some((s) => s === '' || s === '.' || s === '..' || s.startsWith('.') || s.includes('\\'))) return null
   let dir: string
@@ -136,7 +137,7 @@ export function resolveAsset(id: string, version: string, rest: string): string 
   } catch {
     return null
   }
-  return real
+  return { file: real, unconfirmedIcon: unconfirmed }
 }
 
 export function createExtensionRoutes() {
@@ -302,9 +303,10 @@ export function createExtensionRoutes() {
   // in the path is the credential.
   app.get('/extensions/:id/:version/:token/:rest{.+}', (c) => {
     if (!verifyScopedToken(c.req.param('token'), EXT_TOKEN_SCOPE)) return c.json({ error: 'Unauthorized' }, 401)
-    const abs = resolveAsset(c.req.param('id'), c.req.param('version'), c.req.param('rest'))
-    if (!abs) return c.json({ error: 'Not found' }, 404)
-    if (abs === 'unconfirmed') return c.json({ error: 'the backend of this extension is not confirmed — confirm it in Settings → Extensions', code: 'backend-unconfirmed' }, 403)
+    const hit = resolveAsset(c.req.param('id'), c.req.param('version'), c.req.param('rest'))
+    if (!hit) return c.json({ error: 'Not found' }, 404)
+    if (hit === 'unconfirmed') return c.json({ error: 'the backend of this extension is not confirmed — confirm it in Settings → Extensions', code: 'backend-unconfirmed' }, 403)
+    const abs = hit.file
     const stat = fs.statSync(abs)
     const nodeStream = fs.createReadStream(abs)
     c.req.raw.signal?.addEventListener('abort', () => nodeStream.destroy(), { once: true })
@@ -321,6 +323,13 @@ export function createExtensionRoutes() {
         'Access-Control-Allow-Origin': '*',
         // The token is in the URL — keep it out of Referer headers.
         'Referrer-Policy': 'no-referrer',
+        // An unconfirmed extension's icon may be an SVG with <script>: opened
+        // as a page it would run. sandbox makes that document an opaque
+        // origin with no scripts; a CSS mask loads it as an image, unaffected.
+        ...(hit.unconfirmedIcon && {
+          'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          'X-Content-Type-Options': 'nosniff',
+        }),
       },
     })
   })

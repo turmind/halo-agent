@@ -400,10 +400,15 @@ describe('static assets of an unconfirmed backend extension', () => {
       expect(res.status, rest).toBe(403)
       expect(await res.json()).toMatchObject({ code: 'backend-unconfirmed' })
     }
-    const a = await asset('glb', '1.0.0', 'icons/a.svg')
-    expect(a.status).toBe(200)
-    expect(a.headers.get('content-type')).toBe('image/svg+xml')
-    expect((await asset('glb', '1.0.0', 'c.png')).status).toBe(200)
+    // Review-3: an icon (an SVG may carry <script>) opened directly is a
+    // sandboxed, script-less document.
+    for (const rest of ['icons/a.svg', 'c.png']) {
+      const res = await asset('glb', '1.0.0', rest)
+      expect(res.status, rest).toBe(200)
+      expect(res.headers.get('content-security-policy'), rest).toBe("default-src 'none'; style-src 'unsafe-inline'; sandbox")
+      expect(res.headers.get('x-content-type-options'), rest).toBe('nosniff')
+    }
+    expect((await asset('glb', '1.0.0', 'icons/a.svg')).headers.get('content-type')).toBe('image/svg+xml')
     // still the normal checks first: wrong version / bad token
     expect((await asset('glb', '9.9.9', 'index.html')).status).toBe(404)
     expect((await asset('glb', '1.0.0', 'index.html', 'garbage')).status).toBe(401)
@@ -415,6 +420,11 @@ describe('static assets of an unconfirmed backend extension', () => {
     expect(html.status).toBe(200)
     expect(await html.text()).toBe('<html>glb</html>')
     expect((await asset('glb', '1.0.0', 'app.js')).status).toBe(200)
+    expect(html.headers.get('content-security-policy')).toBeNull()
+    const icon = await asset('glb', '1.0.0', 'icons/a.svg')
+    expect(icon.status).toBe(200)
+    expect(icon.headers.get('content-security-policy')).toBeNull()
+    expect(icon.headers.get('x-content-type-options')).toBeNull()
     // confirming started it once (warm-up); the next test's beforeEach removes it
     const { extensionBackends } = await import('../src/extensions/backend.js')
     expect((await app.request('/api/extensions/glb', { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(200)
