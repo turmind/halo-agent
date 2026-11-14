@@ -20,7 +20,7 @@ import fs, { type FSWatcher } from 'node:fs'
 import { broadcast } from '../ws/broadcast.js'
 import { extensionBackends } from './backend.js'
 import { rejudgeExtensionUpdates } from '../updates/extension-check.js'
-import { extensionsRoot, getSnapshot, scanExtensions, snapshotKey } from './registry.js'
+import { extensionsRoot, getSnapshot, removeStaleStagingDirs, scanExtensions, snapshotKey } from './registry.js'
 
 let watcher: FSWatcher | null = null
 let flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -76,8 +76,9 @@ function closeWatcher(): void {
   }
 }
 
-/** Create the root if needed, take the initial snapshot (no broadcast — there
- *  is nobody connected yet at boot), and start watching. Idempotent. */
+/** Create the root if needed, remove interrupted installs' staging dirs,
+ *  take the initial snapshot (no broadcast — there is nobody connected yet at
+ *  boot), and start watching. Idempotent. */
 export function start(): void {
   if (watcher) return
   const root = extensionsRoot()
@@ -86,6 +87,7 @@ export function start(): void {
   } catch (err) {
     console.warn(`[Extensions] cannot create ${root}: ${err instanceof Error ? err.message : String(err)}`)
   }
+  removeStaleStagingDirs()
   const snap = scanExtensions()
   lastKey = snapshotKey(snap)
   openWatcher(root)

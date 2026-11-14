@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseManifest, scanExtensions, getSnapshot, getExtension, getInstalledExtension, snapshotKey, readExtensionDir, extensionsRoot } from '../src/extensions/registry.js'
+import { parseManifest, scanExtensions, getSnapshot, getExtension, getInstalledExtension, snapshotKey, readExtensionDir, extensionsRoot, removeStaleStagingDirs, STAGING_MAX_AGE_MS } from '../src/extensions/registry.js'
 import { confirmedBackendIds, confirmExtensionBackend, disabledExtensionIds, setExtensionDisabled } from '../src/extensions/state.js'
 import { backendIsolation } from '../src/tools/sandbox.js'
 
@@ -359,6 +359,45 @@ describe('scanExtensions (on-disk)', () => {
     expect(confirmedBackendIds().has('vi')).toBe(true)
     fs.renameSync(path.join(root, '.old-vi-a1b2c3'), path.join(root, 'vi'))
     expect(scanExtensions().extensions[0].backend?.confirmed).toBe(true)
+  })
+
+  // Review-2 #2: the in-flight exemption ends — a staging dir older than
+  // STAGING_MAX_AGE_MS (later of mtime / ctime) is an interrupted install's
+  // leftover; the confirmation is dropped and boot removes the dir. utimes
+  // bumps ctime to now, so the clock is moved forward instead.
+  it('a staging dir older than 10 minutes no longer keeps the confirmation; boot removes it, a younger one stays', () => {
+    expect(STAGING_MAX_AGE_MS).toBe(10 * 60_000)
+    const root = extensionsRoot()
+    writeExt('vi', { ...ok, id: 'vi', backend: { entry: 'b.cjs' } }, { 'index.html': '<html>', 'b.cjs': '' })
+    confirmExtensionBackend('vi')
+    fs.renameSync(path.join(root, 'vi'), path.join(root, '.old-vi-a1b2c3'))
+    fs.mkdirSync(path.join(root, '.tmp-unpack-abcdef'))
+    const later = Date.now() + STAGING_MAX_AGE_MS + 60_000
+    fs.mkdirSync(path.join(root, '.tmp-other-123456')) // made "now" in the moved clock, for another id
+    fs.utimesSync(path.join(root, '.tmp-other-123456'), new Date(later), new Date(later))
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later)
+    try {
+      scanExtensions()
+      expect(confirmedBackendIds().has('vi')).toBe(false)
+      removeStaleStagingDirs()
+    } finally { clock.mockRestore() }
+    expect(fs.readdirSync(root).filter((n) => n.startsWith('.')).sort()).toEqual(['.state.json', '.tmp-other-123456'])
+  })
+
+  // The install path: `<id>/` (mtime from unzip, maybe months old) renamed
+  // to `.old-<id>-*` right now is in flight — the rename bumped its ctime.
+  it('an old <id>/ just renamed aside still counts as in flight (ctime, not mtime)', () => {
+    const root = extensionsRoot()
+    writeExt('vi', { ...ok, id: 'vi', backend: { entry: 'b.cjs' } }, { 'index.html': '<html>', 'b.cjs': '' })
+    confirmExtensionBackend('vi')
+    const longAgo = new Date('2020-01-01T00:00:00Z')
+    fs.utimesSync(path.join(root, 'vi'), longAgo, longAgo)
+    fs.renameSync(path.join(root, 'vi'), path.join(root, '.old-vi-a1b2c3'))
+    expect(fs.statSync(path.join(root, '.old-vi-a1b2c3')).mtimeMs).toBe(longAgo.getTime())
+    scanExtensions()
+    expect(confirmedBackendIds().has('vi')).toBe(true)
+    removeStaleStagingDirs()
+    expect(fs.existsSync(path.join(root, '.old-vi-a1b2c3'))).toBe(true)
   })
 
   it('drops nothing when the root can\'t be listed', () => {

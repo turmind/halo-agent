@@ -294,16 +294,34 @@ export function setBackendFailureLookup(fn: (ext: ExtensionInfo) => string | und
 
 let snapshot: ExtensionsSnapshot = { extensions: [], disabled: [], errors: [] }
 
+/** An installer staging dir (`.tmp-<id>-<rand>` / `.old-<id>-<rand>`,
+ *  install.ts and ext.sh) older than this is a leftover of an interrupted
+ *  install, not one in flight (a swap is a few renames; the unpack before it
+ *  is bounded by the 100 MB zip cap). Judged by the later of mtime and
+ *  ctime: `.old-<id>-*` is the old `<id>/` renamed (and `.tmp-<id>-*` an
+ *  unzipped tree, whose dir mtimes unzip restores), so its mtime can be
+ *  months old — the rename only bumps ctime. */
+export const STAGING_MAX_AGE_MS = 10 * 60_000
+const STAGING_RE = /^\.(?:tmp|old)-(.+)-[0-9a-z]+$/
+
+function stagingAge(root: string, name: string): number {
+  try {
+    const st = fs.statSync(path.join(root, name))
+    return Date.now() - Math.max(st.mtimeMs, st.ctimeMs)
+  } catch { return Infinity }
+}
+
 /** Drop the backend confirmation of every id whose `<id>/` is not on disk
  *  any more, unless an installer rename is in flight for it (`.tmp-<id>-*` /
- *  `.old-<id>-*` present — install.ts, ext.sh: `<id>/` is about to be back). */
-function dropGoneConfirmations(entries: fs.Dirent[]): void {
+ *  `.old-<id>-*` younger than STAGING_MAX_AGE_MS — `<id>/` is about to be
+ *  back). */
+function dropGoneConfirmations(root: string, entries: fs.Dirent[]): void {
   const present = new Set<string>()
   for (const e of entries) {
     if (!e.isDirectory()) continue
     present.add(e.name)
-    const staged = /^\.(?:tmp|old)-(.+)-[0-9a-z]+$/.exec(e.name)
-    if (staged) present.add(staged[1])
+    const staged = STAGING_RE.exec(e.name)
+    if (staged && stagingAge(root, e.name) < STAGING_MAX_AGE_MS) present.add(staged[1])
   }
   const gone = [...confirmedBackendIds()].filter((id) => !present.has(id))
   if (gone.length === 0) return
@@ -314,13 +332,34 @@ function dropGoneConfirmations(entries: fs.Dirent[]): void {
   }
 }
 
+/** Boot: remove installer staging dirs (`.tmp-*` / `.old-*`) older than
+ *  STAGING_MAX_AGE_MS — what an install interrupted by a crash or a kill
+ *  left behind. A younger one may be another process's install in flight
+ *  (ext.sh, a second server on the same HOME) and stays. */
+export function removeStaleStagingDirs(): void {
+  const root = extensionsRoot()
+  let names: string[]
+  try { names = fs.readdirSync(root) } catch { return }
+  for (const name of names) {
+    if (!/^\.(?:tmp|old)-/.test(name) || stagingAge(root, name) < STAGING_MAX_AGE_MS) continue
+    try {
+      fs.rmSync(path.join(root, name), { recursive: true, force: true })
+      console.log(`[Extensions] removed leftover staging dir ${name}`)
+    } catch (err) {
+      console.warn(`[Extensions] could not remove leftover staging dir ${name}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+}
+
 /** Scan the root and replace the cached snapshot. Missing root = empty.
  *  Valid extensions the user switched off (state.ts) go to `disabled`.
  *  A backend confirmation whose `<id>/` is gone from disk — uninstalled by
  *  any means, a manual `rm -rf` with the server down included — is dropped
- *  here, so the same id put back asks again; an id mid-swap (installer
- *  staging dir present) keeps it. The disk is the truth, not a process's
- *  memory: this runs at boot and on every watcher rescan. */
+ *  here, so the same id put back after a rescan asks again; an id mid-swap
+ *  (installer staging dir younger than STAGING_MAX_AGE_MS) keeps it. The
+ *  disk is the truth, not a process's memory: this runs at boot and on every
+ *  watcher rescan. Not a guarantee for filesystem edits between two scans or
+ *  with the server down — whoever can write the root can write .state.json. */
 export function scanExtensions(): ExtensionsSnapshot {
   const root = extensionsRoot()
   let entries: fs.Dirent[] | null = null
@@ -328,7 +367,7 @@ export function scanExtensions(): ExtensionsSnapshot {
     entries = fs.readdirSync(root, { withFileTypes: true })
   } catch { /* root not created yet — nothing installed */ }
   // An unreadable root drops nothing: "can't list" is not "uninstalled".
-  if (entries) dropGoneConfirmations(entries)
+  if (entries) dropGoneConfirmations(root, entries)
   const off = disabledExtensionIds()
   const extensions: ExtensionInfo[] = []
   const disabled: ExtensionInfo[] = []
