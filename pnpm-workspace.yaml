@@ -29,3 +29,8 @@ overrides:
   'browserslist@<=4.28.6': ^4.28.7          # via next
   'postcss@<=8.5.17': ^8.5.28               # via next
   'sharp@<0.35.4': ^0.35.4                  # via next
+# Ceiling, not a floor: the @opentelemetry 2.x SDK peers on api <1.10.0 (npm
+# honours that; pnpm only warns). api 1.10 splits into .mjs / .cjs, so otel.ts's
+# tracer (import) and the SDK's provider (require) land on different proxies and
+# no span records. Drop once the SDK's peer range admits 1.10.
+  '@opentelemetry/api': '>=1.9.1 <1.10.0'   # via packages/server
