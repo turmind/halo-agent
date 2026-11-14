@@ -255,6 +255,13 @@ export function globalExtensionsDir(): string {
   return path.join(globalDir(), 'extensions')
 }
 
+/** `~/.halo/global/extension-data/<id>` — an extension backend's own data
+ *  directory (models, caches), handed to it as `HALO_EXT_DATA_DIR`. Outside
+ *  `extensions/<id>/` so an update (which swaps that directory) keeps it. */
+export function globalExtensionDataDir(id: string): string {
+  return path.join(globalDir(), 'extension-data', id)
+}
+
 /** `~/.halo/global/stt-models` — on-device speech-to-text model files
  *  (downloaded on demand by stt/models.ts). */
 export function globalSttModelsDir(): string {

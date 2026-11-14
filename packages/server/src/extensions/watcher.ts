@@ -17,6 +17,7 @@ import fs, { type FSWatcher } from 'node:fs'
 import type { ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { broadcast } from '../ws/broadcast.js'
 import { sttModels } from '../stt/models.js'
+import { extensionBackends } from './backend.js'
 import { rejudgeExtensionUpdates } from '../updates/extension-check.js'
 import { extensionsRoot, getSnapshot, scanExtensions, snapshotKey } from './registry.js'
 
@@ -39,6 +40,9 @@ function scheduleFlush(): void {
 export function rescanAndBroadcast(): void {
   const snap = scanExtensions()
   reconcileSttModels(snap)
+  // A removed / switched-off / updated extension's backend stops now (an
+  // update's new version starts on its next request).
+  extensionBackends.reconcile(snap)
   const key = snapshotKey(snap)
   if (key === lastKey) return
   lastKey = key

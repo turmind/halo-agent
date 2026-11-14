@@ -23,6 +23,7 @@ export type {
   ExtensionPriority,
   ExtensionActivity,
   ExtensionChatbar,
+  ExtensionBackend,
   ExtensionSettingField,
   ExtensionSettings,
   ExtensionInfo,

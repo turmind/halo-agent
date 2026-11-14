@@ -76,6 +76,13 @@ export interface ExtensionChatbar {
   order: number
 }
 
+/** Manifest `backend`: a Node script inside the extension directory the
+ *  server runs on demand as a child process behind `/api/ext/<id>/*`
+ *  (HTTP + WS forwarded), stopped again when idle. */
+export interface ExtensionBackend {
+  entry: string
+}
+
 export interface ExtensionInfo {
   /** Directory name under `~/.halo/global/extensions/`; must equal manifest.id. */
   id: string
@@ -102,6 +109,8 @@ export interface ExtensionInfo {
   activity?: ExtensionActivity
   /** Chat-input toolbar button; absent = none. */
   chatbar?: ExtensionChatbar
+  /** Server-side process; absent = static only (the iframe is all there is). */
+  backend?: ExtensionBackend
   homepage?: string
   license?: string
   /** https URL of this extension's update.json; absent = `<hub_base>/<id>/update.json`. */

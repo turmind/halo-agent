@@ -3,6 +3,8 @@
  * to `noServer` ws servers. One listener for every WS endpoint: a ws server
  * attached with `{ server, path }` aborts every other path's handshake with
  * 400, so a second endpoint can't simply attach alongside the first.
+ * `prefixes` (checked after the exact routes) take a whole subtree — the
+ * extension-backend proxy owns `/api/ext/`.
  *
  * Runs before any auth, outside every request handler, on raw client input —
  * a throw here is an uncaught exception that takes the process down. Hence
@@ -14,9 +16,10 @@ import type { Duplex } from 'node:stream'
 
 export type UpgradeHandler = (req: IncomingMessage, socket: Duplex, head: Buffer) => void
 
-export function createUpgradeRouter(routes: ReadonlyMap<string, UpgradeHandler>): UpgradeHandler {
+export function createUpgradeRouter(routes: ReadonlyMap<string, UpgradeHandler>, prefixes: ReadonlyArray<readonly [string, UpgradeHandler]> = []): UpgradeHandler {
   return (req, socket, head) => {
-    const handler = routes.get((req.url ?? '/').split('?')[0])
+    const pathname = (req.url ?? '/').split('?')[0]
+    const handler = routes.get(pathname) ?? prefixes.find(([p]) => pathname.startsWith(p))?.[1]
     if (handler) handler(req, socket, head)
     else socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
   }

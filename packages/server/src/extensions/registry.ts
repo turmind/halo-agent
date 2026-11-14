@@ -19,7 +19,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ExtensionActivity, ExtensionCapability, ExtensionChatbar, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { ExtensionActivity, ExtensionBackend, ExtensionCapability, ExtensionChatbar, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { globalExtensionsDir } from '../paths.js'
 import { disabledExtensionIds } from './state.js'
 
@@ -165,6 +165,17 @@ export function parseManifest(
     }
   }
 
+  let backend: ExtensionBackend | undefined
+  if (m.backend !== undefined) {
+    if (typeof m.backend !== 'object' || m.backend === null || Array.isArray(m.backend)) return { error: 'backend must be an object' }
+    const b = m.backend as Record<string, unknown>
+    if (typeof b.entry !== 'string' || b.entry === '' || b.entry.startsWith('/') || b.entry.split(/[\\/]/).includes('..') || !/\.(js|mjs|cjs)$/.test(b.entry)) {
+      return { error: 'backend.entry must be a relative .js / .mjs / .cjs path inside the extension directory' }
+    }
+    if (!entryExists(b.entry)) return { error: `backend entry not found: ${b.entry}` }
+    backend = { entry: b.entry }
+  }
+
   // The key stays required even for an activity / chatbar-only extension
   // (`[]`): the `extension` skill's ext.sh pre-check demands it.
   if (activity || chatbar) {
@@ -237,6 +248,7 @@ export function parseManifest(
     ...(settings ? { settings } : {}),
     ...(activity ? { activity } : {}),
     ...(chatbar ? { chatbar } : {}),
+    ...(backend ? { backend } : {}),
     ...(m.homepage !== undefined ? { homepage: m.homepage } : {}),
     ...(m.license !== undefined ? { license: m.license } : {}),
     ...(m.source !== undefined ? { source: m.source } : {}),

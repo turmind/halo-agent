@@ -26,6 +26,8 @@ import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
 import { createTranscribeProxy, TRANSCRIBE_PATH } from './routes/transcribe-ws.js'
 import { createSttProxy, STT_PATH } from './routes/stt-ws.js'
+import { createExtBackendRoutes, createExtBackendUpgrade, EXT_BACKEND_PREFIX } from './routes/ext-backend.js'
+import { extensionBackends } from './extensions/backend.js'
 import { createJupyterChannels, createJupyterRoutes, JUPYTER_CHANNELS_PATH } from './routes/jupyter.js'
 import { createJupyterManager } from './jupyter/manager.js'
 import { createUpgradeRouter, type UpgradeHandler } from './ws/upgrade-router.js'
@@ -403,6 +405,10 @@ if (!AGENTCORE) {
   app.route('/api', createUpdateRoutes())
 
   app.route('/api', createJupyterRoutes(jupyter!))
+
+  // Extension backends: `/api/ext/<id>/*` forwarded to the extension's own
+  // on-demand child process (extensions/backend.ts); WS via the upgrade router.
+  app.route('/api', createExtBackendRoutes())
 }
 // Hub-installed provider yamls (~/.halo/global/models.d/): drop the registry
 // cache + push `models:changed` on change, so `/extension models` applies live.
@@ -684,7 +690,7 @@ if (transcribe) upgradeRoutes.set(TRANSCRIBE_PATH, transcribe.handleUpgrade)
 if (stt) upgradeRoutes.set(STT_PATH, stt.handleUpgrade)
 if (jupyterChannels) upgradeRoutes.set(JUPYTER_CHANNELS_PATH, jupyterChannels.handleUpgrade)
 if (nodeHub) upgradeRoutes.set(NODE_WS_PATH, nodeHub.handleUpgrade)
-;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes))
+;(server as import('node:http').Server).on('upgrade', createUpgradeRouter(upgradeRoutes, AGENTCORE ? [] : [[EXT_BACKEND_PREFIX, createExtBackendUpgrade()]]))
 
 // ------------------------------------------------------------------
 // Graceful shutdown
@@ -723,6 +729,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Stops the jupyter server and with it every kernel (bounded to 5s).
   jupyterChannels?.close()
   await jupyter?.stop()
+  // Extension backend children (bounded; they also exit when our IPC closes).
+  await extensionBackends.close()
 
   if (server && typeof (server as import('node:http').Server).close === 'function') {
     (server as import('node:http').Server).close()
