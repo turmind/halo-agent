@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import type { ExtensionBackendIsolation } from '@turmind/halo-core/protocol'
 import { cleanChildEnv, outboundProxyEnv } from '../child-env.js'
 
 const execAsync = promisify(exec)
@@ -291,6 +292,15 @@ export function describeSandboxUnavailable(
 export function sandboxUnavailableWarning(tag: string, reason?: SandboxUnavailableReason | null): string | null {
   const d = describeSandboxUnavailable(reason)
   return d && `[${tag}] OS sandbox unavailable (${d.reason}) — workspace/readonly sessions get no shell_exec. Fix: ${d.fix}`
+}
+
+/** How an extension backend runs here (extensions/backend.ts spawns it under
+ *  bwrap only for 'bwrap'; the rest run with Halo's own file access). Shown
+ *  in Settings → Extensions and the confirm prompt. Valid after initBwrapCheck(). */
+export function backendIsolation(): ExtensionBackendIsolation {
+  if (process.platform !== 'linux') return 'unsupported'
+  if (_bwrapAvailable === true) return 'bwrap'
+  return _bwrapUnavailableReason?.kind === 'namespaces-blocked' ? 'bwrap-unusable' : 'bwrap-missing'
 }
 
 export function isBwrapCached(): boolean {

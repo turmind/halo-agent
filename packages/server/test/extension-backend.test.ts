@@ -233,6 +233,166 @@ describe('extension backends', () => {
     expect(backends.list()).toEqual([])
   })
 
+  // Review #4: the WS 101 must not carry the backend's Set-Cookie.
+  it('filters Set-Cookie out of the WS 101 like HTTP, keeping the upgrade headers', async () => {
+    install('wscookie', BACKEND_SRC.replace("const wss = new WebSocketServer({ noServer: true })",
+      "const wss = new WebSocketServer({ noServer: true })\nwss.on('headers', (h) => { h.push('Set-Cookie: halo_token=evil; Path=/'); h.push('X-Kept: yes') })"))
+    const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      const ws = new WebSocket(`${base.replace('http', 'ws')}/api/ext/wscookie/stream`, { headers: { cookie: 'halo_token=good' } })
+      ws.on('upgrade', (r) => { resolve(r); ws.close() })
+      ws.on('error', reject)
+    })
+    expect(res.headers['set-cookie']).toBeUndefined()
+    expect(res.headers['x-kept']).toBe('yes')
+    expect(res.headers.upgrade?.toLowerCase()).toBe('websocket')
+    expect(res.headers['sec-websocket-accept']).toBeTruthy()
+  })
+
+  // Review #9: a client gone before the response head must cancel upstream
+  // and release its count, or the backend never idles out.
+  it('a client cancelling a slow request aborts the upstream request and releases the backend', async () => {
+    install('slow', BACKEND_SRC.replace("if (req.url === '/crash') process.exit(3)",
+      "if (req.url === '/crash') process.exit(3)\n  if (req.url === '/never') return"))
+    const { pid } = await (await get('/api/ext/slow/')).json()
+    const ac = new AbortController()
+    const pending = get('/api/ext/slow/never', { signal: ac.signal }).catch((e: Error) => e)
+    await sleep(150)
+    ac.abort()
+    expect(await pending).toBeInstanceOf(Error)
+    // Released → the idle timer runs → the process exits after IDLE_MS.
+    await until(() => !alive(pid), IDLE_MS * 6)
+  })
+
+  // Review #7: a stopping instance keeps its entry until it exited; the next
+  // start of the same id waits — never two processes on one data dir.
+  it('a start during the stop grace period waits for the old process to exit', async () => {
+    install('slowstop', BACKEND_SRC.replace("server.listen(",
+      "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 600))\nserver.listen("))
+    const { pid } = await (await get('/api/ext/slowstop/')).json()
+    backends.reconcile({ extensions: [{ ...ext('slowstop'), installedAt: 2 }] as never, disabled: [], errors: [] })
+    installed.slowstop = ext('slowstop', { installedAt: 2 })
+    const t0 = Date.now()
+    const next = await (await get('/api/ext/slowstop/')).json()
+    expect(alive(pid)).toBe(false) // the old one was gone before the new one answered
+    expect(next.pid).not.toBe(pid)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(500)
+    expect(backends.list().map((b) => b.pid)).toEqual([next.pid])
+  })
+
+  // Review #7: close() must wait for an instance already stopping too.
+  it('close() waits for an instance that was already stopping', async () => {
+    install('closing', BACKEND_SRC.replace("server.listen(",
+      "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 400))\nserver.listen("))
+    const { pid } = await (await get('/api/ext/closing/')).json()
+    backends.reconcile({ extensions: [], disabled: [], errors: [] })
+    await backends.close()
+    expect(alive(pid)).toBe(false)
+  })
+
+  // Review #6: a backend that keeps failing is not restarted without bound.
+  it('stops restarting after 3 failures within the window; switching off and on resets it', async () => {
+    let spawns = 0
+    install('flaky', 'process.exit(1)')
+    const statuses: number[] = []
+    for (let i = 0; i < 6; i++) {
+      const res = await get('/api/ext/flaky/')
+      statuses.push(res.status)
+      const body = await res.json()
+      if (!/is not restarted/.test(body.error)) spawns++ // each of these spawned and died
+    }
+    expect(spawns).toBe(3)
+    expect(statuses.every((s) => s === 502)).toBe(true)
+    expect(backends.failure(installed.flaky as never)).toMatch(/exited before ready/)
+    expect((await (await get('/api/ext/flaky/')).json()).error).toMatch(/failed 3 times within 60s and is not restarted/)
+    // An update (new version / install time) starts with a fresh budget…
+    expect(backends.failure({ ...(installed.flaky as object), installedAt: 9 } as never)).toBeUndefined()
+    // …and so does switching it off (reconcile without it) and on again.
+    backends.reconcile({ extensions: [], disabled: [], errors: [] })
+    expect(backends.failure(installed.flaky as never)).toBeUndefined()
+    fs.writeFileSync(path.join(root, 'flaky', 'backend', 'main.cjs'), BACKEND_SRC)
+    expect((await get('/api/ext/flaky/')).status).toBe(200)
+  })
+
+  it('an unexpected exit after ready counts against the budget too; a stop Halo asked for does not', async () => {
+    install('crashloop')
+    for (let i = 0; i < 2; i++) {
+      const { pid } = await (await get('/api/ext/crashloop/')).json()
+      await get('/api/ext/crashloop/crash')
+      await until(() => !alive(pid))
+    }
+    expect(backends.failure(installed.crashloop as never)).toBeUndefined()
+    // A stop Halo asked for (idle here) is not a failure: two crashes plus
+    // one idle stop leave the budget unspent.
+    const { pid } = await (await get('/api/ext/crashloop/')).json()
+    await until(() => !alive(pid), IDLE_MS * 6)
+    expect(backends.failure(installed.crashloop as never)).toBeUndefined()
+    const again = await (await get('/api/ext/crashloop/')).json()
+    await get('/api/ext/crashloop/crash')
+    await until(() => !alive(again.pid))
+    expect(backends.failure(installed.crashloop as never)).toMatch(/exited unexpectedly/)
+    expect((await get('/api/ext/crashloop/')).status).toBe(502)
+  })
+
+  // Review #10: an instance removes its socket when it ends; a dead server's
+  // socket dir is removed by the next one, a live server's is left alone.
+  it('removes its socket on exit and the socket dirs of servers that are gone', async () => {
+    if (process.platform === 'win32') return // named pipes leave nothing on disk
+    const tmp = os.tmpdir()
+    const dead = fs.mkdtempSync(path.join(tmp, 'halo-ext-999999999-'))
+    fs.writeFileSync(path.join(dead, '1.sock'), '')
+    const live = fs.mkdtempSync(path.join(tmp, `halo-ext-${process.ppid}-`))
+    const fresh = createExtensionBackends({ idleMs: IDLE_MS, readyTimeoutMs: 5000, extensionDir: (id) => path.join(root, id) })
+    try {
+      install('sock')
+      const b = await fresh.acquire(installed.sock as never)
+      expect(fs.existsSync(b.socket)).toBe(true)
+      expect(fs.existsSync(dead)).toBe(false)
+      expect(fs.existsSync(live)).toBe(true)
+      fresh.release(b)
+      await until(() => !fs.existsSync(b.socket), IDLE_MS * 6)
+    } finally {
+      await fresh.close()
+      fs.rmSync(live, { recursive: true, force: true })
+    }
+  })
+
+  // Review #8: a failed spawn emits error + close, no exit — it must wind
+  // down the same way, not leave a forever-rejected entry behind.
+  it('a spawn error winds down like an exit: no stale entry, the next request starts fresh', async () => {
+    const later = path.join(root, 'later')
+    const fresh = createExtensionBackends({ idleMs: IDLE_MS, readyTimeoutMs: 5000, extensionDir: () => later })
+    try {
+      installed.late = ext('late')
+      confirmExtensionBackend('late')
+      await expect(fresh.acquire(installed.late as never)).rejects.toThrow(/spawn failed: .*ENOENT/)
+      expect(fresh.list()).toEqual([])
+      fs.mkdirSync(path.join(later, 'backend'), { recursive: true })
+      fs.writeFileSync(path.join(later, 'backend', 'main.cjs'), BACKEND_SRC)
+      const b = await fresh.acquire(installed.late as never)
+      expect(alive(b.pid!)).toBe(true)
+      fresh.release(b)
+    } finally {
+      await fresh.close()
+    }
+  })
+
+  // Review #5: install / update / uninstall stop the backend before touching
+  // <id>/ and keep it from starting until they let go.
+  it('suspend() stops the backend, waits for its exit and refuses starts until resumed', async () => {
+    install('held', BACKEND_SRC.replace("server.listen(",
+      "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 300))\nserver.listen("))
+    const { pid } = await (await get('/api/ext/held/')).json()
+    const resume = await backends.suspend('held')
+    expect(alive(pid)).toBe(false) // resolved only after the exit
+    const refused = await get('/api/ext/held/')
+    expect(refused.status).toBe(502)
+    expect((await refused.json()).error).toMatch(/being installed or removed/)
+    expect(backends.list()).toEqual([])
+    resume()
+    resume() // idempotent
+    expect((await get('/api/ext/held/')).status).toBe(200)
+  })
+
   it('reconcile stops a removed or updated extension; close stops all', async () => {
     install('r1')
     install('r2')

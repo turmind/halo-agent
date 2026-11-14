@@ -9,14 +9,18 @@
  * rest of `/api`, and the WS handshake checks the same cookie as `/ws`. The
  * cookie is stripped before forwarding (a backend never needs the login), and
  * a backend's `Set-Cookie` is dropped (it must not set cookies on the admin
- * origin). Unknown, switched-off or backend-less extension → 404; a backend
+ * origin) — from HTTP responses and the WS 101 alike (DROP_RESPONSE).
+ * Unknown, switched-off or backend-less extension → 404; a backend
  * no admin confirmed yet → 403 `{ code: 'backend-unconfirmed' }` (a WS just
  * gets the 403 status line — the browser can't read it, so an extension
  * whose socket never opened asks over HTTP to learn why); a backend that
  * can't start → 502 with the reason.
  *
  * Each in-flight request and each open WS counts as one user of the backend
- * (acquire / release), which is what keeps it from idling out.
+ * (acquire / release, exactly once per request on every path), which is what
+ * keeps it from idling out. A client that goes away cancels the upstream
+ * request (HTTP: the request's abort signal; WS: its socket closing), so a
+ * backend slow to answer can't hold a count — and the backend — forever.
  */
 import http, { type IncomingHttpHeaders, type IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -84,7 +88,9 @@ export function createExtBackendRoutes(backends: ExtensionBackends = extensionBa
     const release = () => { if (!released) { released = true; backends.release(b) } }
     try {
       const res = await new Promise<IncomingMessage>((resolve, reject) => {
-        const up = http.request({ socketPath: b.socket, path: split.target, method: req.method, headers: forwardHeaders(reqHeaders, split.id) }, resolve)
+        // `signal`: the client went away (before or after the response
+        // head) → the upstream request is destroyed → error / close → release.
+        const up = http.request({ socketPath: b.socket, path: split.target, method: req.method, headers: forwardHeaders(reqHeaders, split.id), signal: req.signal }, resolve)
         up.on('error', reject)
         if (req.body) Readable.fromWeb(req.body as import('node:stream/web').ReadableStream).on('error', (e) => up.destroy(e)).pipe(up)
         else up.end()
@@ -124,15 +130,21 @@ export function createExtBackendUpgrade(backends: ExtensionBackends = extensionB
       let released = false
       const release = () => { if (!released) { released = true; backends.release(b) } }
       if (socket.destroyed) { release(); return }
-      socket.once('close', release)
       // Upgrade headers are hop-by-hop but are the point here: put them back.
       const headers = forwardHeaders(headerPairs(req.headers), split.id)
       headers.connection = 'Upgrade'
       headers.upgrade = req.headers.upgrade ?? 'websocket'
       const up = http.request({ socketPath: b.socket, path: split.target, method: 'GET', headers })
+      // The client leaving before the backend answered cancels the handshake.
+      socket.once('close', () => { release(); up.destroy() })
       up.on('upgrade', (res, upSocket, upHead) => {
-        const lines = [`HTTP/1.1 101 ${res.statusMessage ?? 'Switching Protocols'}`]
-        for (let i = 0; i < res.rawHeaders.length; i += 2) lines.push(`${res.rawHeaders[i]}: ${res.rawHeaders[i + 1]}`)
+        if (socket.destroyed) { upSocket.destroy(); return }
+        // Same filter as HTTP responses (no Set-Cookie on the admin origin);
+        // the two upgrade headers it drops as hop-by-hop are set here.
+        const lines = [`HTTP/1.1 101 ${res.statusMessage ?? 'Switching Protocols'}`, `Upgrade: ${res.headers.upgrade ?? 'websocket'}`, 'Connection: Upgrade']
+        for (let i = 0; i < res.rawHeaders.length; i += 2) {
+          if (!DROP_RESPONSE.has(res.rawHeaders[i].toLowerCase())) lines.push(`${res.rawHeaders[i]}: ${res.rawHeaders[i + 1]}`)
+        }
         socket.write(`${lines.join('\r\n')}\r\n\r\n`)
         if (upHead.length) socket.write(upHead)
         if (head.length) upSocket.write(head)
@@ -148,6 +160,7 @@ export function createExtBackendUpgrade(backends: ExtensionBackends = extensionB
         reject(socket, `${res.statusCode ?? 502} ${res.statusMessage ?? ''}`.trim())
       })
       up.on('error', (err) => {
+        if (socket.destroyed) return // our own destroy() after the client left
         console.warn(`[ExtBackend] ${split.id}: WS forward failed: ${errMsg(err)}`)
         reject(socket, '502 Bad Gateway')
       })

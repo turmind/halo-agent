@@ -12,6 +12,9 @@
  * installer's `.tmp-*` / `.old-*` staging dirs are skipped by the scanner, so
  * a normal install yields exactly one broadcast). The on / off switch's
  * `.state.json` is a direct child too, so its rename lands here the same way.
+ * Each rescan also drops the backend confirmation of an id whose directory
+ * is gone (registry.ts), and a backend running out of restarts
+ * (backend.ts onFailure) schedules one.
  */
 import fs, { type FSWatcher } from 'node:fs'
 import { broadcast } from '../ws/broadcast.js'
@@ -86,6 +89,9 @@ export function start(): void {
   const snap = scanExtensions()
   lastKey = snapshotKey(snap)
   openWatcher(root)
+  // A backend out of restarts shows as `backend.failed` in the snapshot —
+  // nothing on disk changes, so push it from here.
+  extensionBackends.onFailure(scheduleFlush)
   const { extensions, disabled, errors } = getSnapshot()
   if (extensions.length > 0 || disabled.length > 0 || errors.length > 0) {
     console.log(`[Extensions] ${extensions.length} installed${disabled.length ? `, ${disabled.length} off` : ''}${errors.length ? `, ${errors.length} invalid` : ''}: ${[...extensions.map((e) => `${e.id}@${e.version}`), ...disabled.map((e) => `${e.id}@${e.version}(off)`), ...errors.map((e) => `${e.id}(!)`)].join(', ')}`)

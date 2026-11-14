@@ -283,20 +283,90 @@ describe('POST /api/extensions/:id/confirm-backend', () => {
 
   it('an install lands unconfirmed; confirming pushes once, is idempotent, survives an update and is dropped by uninstall', async () => {
     const installed = await upload(app, await zip(), cookie)
-    expect(((await installed.json()) as { backend: unknown }).backend).toEqual({ entry: 'backend/main.cjs', confirmed: false })
+    expect(((await installed.json()) as { backend: unknown }).backend).toMatchObject({ entry: 'backend/main.cjs', confirmed: false })
     sock.sent.length = 0
     expect((await confirm('glb')).status).toBe(200)
-    expect(await backendOf()).toEqual({ entry: 'backend/main.cjs', confirmed: true })
+    expect(await backendOf()).toMatchObject({ entry: 'backend/main.cjs', confirmed: true })
     expect((await confirm('glb')).status).toBe(200)
     await new Promise((r) => setTimeout(r, 450))
     expect(changed()).toHaveLength(1)
 
     const updated = await upload(app, await zip('1.1.0'), cookie)
-    expect(((await updated.json()) as { backend: unknown }).backend).toEqual({ entry: 'backend/main.cjs', confirmed: true })
+    expect(((await updated.json()) as { backend: unknown }).backend).toMatchObject({ entry: 'backend/main.cjs', confirmed: true })
 
     expect((await app.request('/api/extensions/glb', { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(200)
     await upload(app, await zip(), cookie)
-    expect(await backendOf()).toEqual({ entry: 'backend/main.cjs', confirmed: false })
+    expect(await backendOf()).toMatchObject({ entry: 'backend/main.cjs', confirmed: false })
+  })
+
+  // Review #5: install / update / uninstall stop the backend — and wait for
+  // its exit — before they rename / delete <id>/. The backend's SIGTERM
+  // handler records whether its own directory is still in place as it exits
+  // (300 ms after the signal); an installer that went first would have moved
+  // it already.
+  it('install over it and uninstall stop the running backend before touching <id>/', async () => {
+    const { extensionBackends } = await import('../src/extensions/backend.js')
+    const { globalExtensionDataDir } = await import('../src/paths.js')
+    const log = path.join(globalExtensionDataDir('glb'), 'exits.log')
+    fs.rmSync(log, { force: true })
+    const src = `
+      const fs = require('node:fs'), path = require('node:path'), http = require('node:http')
+      process.on('SIGTERM', () => setTimeout(() => {
+        fs.appendFileSync(path.join(process.env.HALO_EXT_DATA_DIR, 'exits.log'), (fs.existsSync(path.join(process.cwd(), 'index.html')) ? 'in-place' : 'moved') + '\\n')
+        process.exit(0)
+      }, 300))
+      http.createServer((q, s) => s.end('ok')).listen(process.env.HALO_EXT_SOCKET, () => process.send({ type: 'ready' }))`
+    const pkg = (version: string) => zipOf({
+      'halo-extension.json': JSON.stringify({ ...manifest, version, backend: { entry: 'backend/main.cjs' } }),
+      'index.html': '<html>glb</html>',
+      'backend/main.cjs': src,
+    })
+    await upload(app, await pkg('1.0.0'), cookie)
+    expect((await confirm('glb')).status).toBe(200)
+    const b = await extensionBackends.acquire(ext.getExtension('glb')!)
+    extensionBackends.release(b)
+
+    expect((await upload(app, await pkg('1.1.0'), cookie)).status).toBe(200)
+    expect(fs.readFileSync(log, 'utf-8')).toBe('in-place\n')
+    expect(extensionBackends.list()).toEqual([])
+
+    const b2 = await extensionBackends.acquire(ext.getExtension('glb')!) // starts again after the update
+    extensionBackends.release(b2)
+    expect((await app.request('/api/extensions/glb', { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(200)
+    expect(fs.readFileSync(log, 'utf-8')).toBe('in-place\nin-place\n')
+    expect(extensionBackends.list()).toEqual([])
+  })
+
+  it('a refused package leaves the running backend alone; a failed uninstall lets starts through again', async () => {
+    const { extensionBackends } = await import('../src/extensions/backend.js')
+    const live = "require('node:http').createServer((q, s) => s.end('ok')).listen(process.env.HALO_EXT_SOCKET, () => process.send({ type: 'ready' }))"
+    await upload(app, await zipOf({
+      'halo-extension.json': JSON.stringify({ ...manifest, backend: { entry: 'backend/main.cjs' } }),
+      'index.html': '<html>glb</html>',
+      'backend/main.cjs': live,
+    }), cookie)
+    expect((await confirm('glb')).status).toBe(200)
+    const b = await extensionBackends.acquire(ext.getExtension('glb')!)
+    // Same id, refused at the pre-check (backend entry missing) — before beforeSwap.
+    const bad = await upload(app, await zipOf({ 'halo-extension.json': JSON.stringify({ ...manifest, backend: { entry: 'missing.cjs' } }), 'index.html': '' }), cookie)
+    expect(bad.status).toBe(400)
+    expect(extensionBackends.list().map((r) => r.pid)).toEqual([b.pid])
+    extensionBackends.release(b)
+    // An uninstall that fails after the hold (rmSync throws) still lets go.
+    const rm = fs.rmSync
+    const spy = (await import('vitest')).vi.spyOn(fs, 'rmSync').mockImplementation((p, o) => {
+      if (String(p) === path.join(root, 'glb')) throw new Error('EBUSY: resource busy or locked')
+      return rm(p, o)
+    })
+    try {
+      expect((await app.request('/api/extensions/glb', { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(500)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(extensionBackends.list()).toEqual([]) // stopped before the attempt
+    const again = await extensionBackends.acquire(ext.getExtension('glb')!) // not refused as "being installed or removed"
+    extensionBackends.release(again)
+    await extensionBackends.close()
   })
 
   it('400 on a bad id or a backend-less extension, 404 when not installed, 401 without the cookie', async () => {

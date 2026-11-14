@@ -21,7 +21,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { ExtensionActivity, ExtensionBackend, ExtensionCapability, ExtensionChatbar, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { globalExtensionsDir } from '../paths.js'
-import { confirmedBackendIds, disabledExtensionIds } from './state.js'
+import { backendIsolation } from '../tools/sandbox.js'
+import { confirmedBackendIds, disabledExtensionIds, dropBackendConfirmations } from './state.js'
 
 export const MANIFEST_FILE = 'halo-extension.json'
 
@@ -275,26 +276,64 @@ export function readExtensionDir(dir: string, id: string = path.basename(dir)): 
   // reinstall counts as "newer" for the admin's newest-default-wins rule.
   let installedAt = 0
   try { installedAt = Math.round(fs.statSync(dir).mtimeMs) } catch { /* raced with an uninstall — 0 sorts last */ }
-  // The admin's confirmation lives in .state.json, not the manifest.
-  if (parsed.backend) parsed.backend.confirmed = confirmedBackendIds().has(id)
+  // The admin's confirmation lives in .state.json, not the manifest; the
+  // isolation is this host's (tools/sandbox.ts).
+  if (parsed.backend) {
+    parsed.backend.confirmed = confirmedBackendIds().has(id)
+    parsed.backend.isolation = backendIsolation()
+  }
   return { ...parsed, installedAt }
+}
+
+/** backend.ts registers its restart-budget lookup (registry can't import it:
+ *  backend.ts imports this module). Unset in CLI / TUI processes. */
+let backendFailure: ((ext: ExtensionInfo) => string | undefined) | undefined
+export function setBackendFailureLookup(fn: (ext: ExtensionInfo) => string | undefined): void {
+  backendFailure = fn
 }
 
 let snapshot: ExtensionsSnapshot = { extensions: [], disabled: [], errors: [] }
 
+/** Drop the backend confirmation of every id whose `<id>/` is not on disk
+ *  any more, unless an installer rename is in flight for it (`.tmp-<id>-*` /
+ *  `.old-<id>-*` present — install.ts, ext.sh: `<id>/` is about to be back). */
+function dropGoneConfirmations(entries: fs.Dirent[]): void {
+  const present = new Set<string>()
+  for (const e of entries) {
+    if (!e.isDirectory()) continue
+    present.add(e.name)
+    const staged = /^\.(?:tmp|old)-(.+)-[0-9a-z]+$/.exec(e.name)
+    if (staged) present.add(staged[1])
+  }
+  const gone = [...confirmedBackendIds()].filter((id) => !present.has(id))
+  if (gone.length === 0) return
+  try {
+    if (dropBackendConfirmations(gone)) console.log(`[Extensions] backend confirmation dropped (no longer installed): ${gone.join(', ')}`)
+  } catch (err) {
+    console.warn(`[Extensions] could not drop the backend confirmation of ${gone.join(', ')}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
 /** Scan the root and replace the cached snapshot. Missing root = empty.
- *  Valid extensions the user switched off (state.ts) go to `disabled`. */
+ *  Valid extensions the user switched off (state.ts) go to `disabled`.
+ *  A backend confirmation whose `<id>/` is gone from disk — uninstalled by
+ *  any means, a manual `rm -rf` with the server down included — is dropped
+ *  here, so the same id put back asks again; an id mid-swap (installer
+ *  staging dir present) keeps it. The disk is the truth, not a process's
+ *  memory: this runs at boot and on every watcher rescan. */
 export function scanExtensions(): ExtensionsSnapshot {
   const root = extensionsRoot()
+  let entries: fs.Dirent[] | null = null
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch { /* root not created yet — nothing installed */ }
+  // An unreadable root drops nothing: "can't list" is not "uninstalled".
+  if (entries) dropGoneConfirmations(entries)
   const off = disabledExtensionIds()
   const extensions: ExtensionInfo[] = []
   const disabled: ExtensionInfo[] = []
   const errors: ExtensionError[] = []
-  let entries: fs.Dirent[] = []
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true })
-  } catch { /* root not created yet — nothing installed */ }
-  for (const entry of entries) {
+  for (const entry of entries ?? []) {
     // `.tmp-<id>-<rand>` / `.old-<id>-<rand>` are the installer's staging
     // dirs (in flight or about to be removed); never list them.
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue
@@ -304,7 +343,14 @@ export function scanExtensions(): ExtensionsSnapshot {
     }
     const result = readExtensionDir(path.join(root, entry.name))
     if ('error' in result) errors.push(result)
-    else (off.has(result.id) ? disabled : extensions).push(result)
+    else if (off.has(result.id)) disabled.push(result)
+    else {
+      // The running server's restart budget (backend.ts); switching it off
+      // resets that, so only an on extension can show it.
+      const failed = result.backend && backendFailure?.(result)
+      if (failed) result.backend!.failed = failed
+      extensions.push(result)
+    }
   }
   extensions.sort((a, b) => a.id.localeCompare(b.id))
   disabled.sort((a, b) => a.id.localeCompare(b.id))
@@ -335,7 +381,7 @@ export function getInstalledExtension(id: string): ExtensionInfo | undefined {
  *  error list. Staging-dir churn during an install produces identical keys
  *  (staging dirs are skipped), so no spurious broadcast. */
 export function snapshotKey(s: ExtensionsSnapshot): string {
-  const key = (e: ExtensionInfo) => `${e.id}@${e.version}#${e.installedAt}${e.backend && !e.backend.confirmed ? '?' : ''}`
+  const key = (e: ExtensionInfo) => `${e.id}@${e.version}#${e.installedAt}${e.backend && !e.backend.confirmed ? '?' : ''}${e.backend?.failed ? `!${e.backend.failed}` : ''}`
   return [
     ...s.extensions.map(key),
     ...s.disabled.map((e) => `-${key(e)}`),

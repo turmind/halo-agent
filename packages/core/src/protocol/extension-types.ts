@@ -81,9 +81,23 @@ export interface ExtensionBackend {
   entry: string
   /** Set by the scanner, not the manifest: an admin confirmed it in Settings →
    *  Extensions (server extensions/state.ts). The server starts no backend
-   *  without it; absent = not confirmed. */
+   *  without it, and the admin loads none of the extension's pages before it;
+   *  absent = not confirmed. */
   confirmed?: boolean
+  /** Set by the scanner: how this server runs it (server tools/sandbox.ts
+   *  backendIsolation). */
+  isolation?: ExtensionBackendIsolation
+  /** Set by the server at runtime: it stopped restarting this backend after
+   *  repeated failures; the last failure's reason. Cleared by switching the
+   *  extension off and on, an update, or a server restart. */
+  failed?: string
 }
+
+/** `bwrap` = writes limited to its data dir (Linux with a working
+ *  bubblewrap). Anything else runs with Halo's own file access:
+ *  `bwrap-missing` (Linux, bubblewrap not installed), `bwrap-unusable`
+ *  (Linux, bwrap can't create namespaces), `unsupported` (macOS, Windows). */
+export type ExtensionBackendIsolation = 'bwrap' | 'bwrap-missing' | 'bwrap-unusable' | 'unsupported'
 
 export interface ExtensionInfo {
   /** Directory name under `~/.halo/global/extensions/`; must equal manifest.id. */

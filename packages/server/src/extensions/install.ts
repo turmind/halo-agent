@@ -90,9 +90,13 @@ function rand(): string {
  * the manifest; the admin upload passes nothing and takes the manifest's id.
  * `expectVersion` — the update route's update.json version — likewise, so a
  * mispacked or swapped zip is refused before it replaces a working install.
+ * `beforeSwap(id)` runs once the id is known and the package passed the
+ * pre-check, before `<id>/` is touched (routes/extensions.ts stops the
+ * extension's backend there — Windows can't rename a directory a live
+ * process holds). Not called for a package refused earlier.
  * Returns the freshly validated info (installedAt from the final rename).
  */
-export async function installExtensionZip(zipBuf: Buffer, expectId?: string, expectVersion?: string): Promise<ExtensionInfo> {
+export async function installExtensionZip(zipBuf: Buffer, expectId?: string, expectVersion?: string, beforeSwap?: (id: string) => Promise<void>): Promise<ExtensionInfo> {
   const root = extensionsRoot()
   fs.mkdirSync(root, { recursive: true })
 
@@ -120,6 +124,7 @@ export async function installExtensionZip(zipBuf: Buffer, expectId?: string, exp
     // Pre-check with the scanner's own rules before touching a working install.
     const verdict = readExtensionDir(stage, manifestId)
     if ('error' in verdict) throw new ExtensionInstallError(`invalid extension: ${verdict.error}`)
+    await beforeSwap?.(manifestId)
 
     // Swap into place — same-directory renames only.
     const target = path.join(root, manifestId)

@@ -60,6 +60,19 @@ export const MAX_ZIP_BYTES = 100 * 1024 * 1024
 /** Ids with an update in flight (POST /extensions/:id/update → 409). */
 const updating = new Set<string>()
 
+/** Install / update / uninstall around `<id>/`: `suspend(id)` refuses new
+ *  starts of its backend and waits until the running one has exited (Windows
+ *  can't rename / delete a directory a live process holds — its cwd, native
+ *  addons); `resume()` lets starts through again, after the rescan, so the
+ *  next request cold-starts the new files. Every exit path calls resume. */
+function holdBackend(): { suspend: (id: string) => Promise<void>; resume: () => void } {
+  let release: (() => void) | undefined
+  return {
+    suspend: async (id) => { release = await extensionBackends.suspend(id) },
+    resume: () => release?.(),
+  }
+}
+
 /** Asset-token lifetime. It only grants reads of extension static files and
  *  the admin fetches a fresh one before every iframe mount, so short is free. */
 const EXT_TOKEN_MAX_AGE = 24 * 60 * 60
@@ -142,8 +155,9 @@ export function createExtensionRoutes() {
     }
     if (!file) return c.json({ error: '`file` (zip) is required' }, 400)
     if (file.size > MAX_ZIP_BYTES) return c.json({ error: `zip exceeds ${MAX_ZIP_BYTES / 1024 / 1024} MB` }, 413)
+    const held = holdBackend()
     try {
-      const info = await installExtensionZip(Buffer.from(await file.arrayBuffer()))
+      const info = await installExtensionZip(Buffer.from(await file.arrayBuffer()), undefined, undefined, held.suspend)
       rescanAndBroadcast()
       return c.json(info)
     } catch (err) {
@@ -151,6 +165,8 @@ export function createExtensionRoutes() {
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[Extensions] install failed: ${msg}`)
       return c.json({ error: msg }, 500)
+    } finally {
+      held.resume()
     }
   })
 
@@ -224,6 +240,7 @@ export function createExtensionRoutes() {
     if (!ext) return c.json({ error: 'Extension not installed' }, 404)
     if (updating.has(id)) return c.json({ error: 'An update of this extension is already running' }, 409)
     updating.add(id)
+    const held = holdBackend()
     try {
       const { entry, info } = await checkExtensionNow(ext)
       if (!info) {
@@ -238,7 +255,7 @@ export function createExtensionRoutes() {
         console.log(`[Extensions] update ${id}: download failed: ${msg}`)
         return c.json({ error: msg }, 502)
       }
-      const installed = await installExtensionZip(zip, id, info.version)
+      const installed = await installExtensionZip(zip, id, info.version, held.suspend)
       console.log(`[Extensions] ${id} updated ${ext.version} → ${installed.version}`)
       rescanAndBroadcast()
       return c.json(installed)
@@ -248,14 +265,17 @@ export function createExtensionRoutes() {
       if (err instanceof ExtensionInstallError) return c.json({ error: msg }, 502)
       return c.json({ error: msg }, 500)
     } finally {
+      held.resume()
       updating.delete(id)
     }
   })
 
-  app.delete('/extensions/:id', (c) => {
+  app.delete('/extensions/:id', async (c) => {
     const id = c.req.param('id')
     if (!isExtensionId(id)) return c.json({ error: 'Invalid extension id' }, 400)
+    const held = holdBackend()
     try {
+      await held.suspend(id)
       if (!uninstallExtension(id)) return c.json({ error: 'Extension not installed' }, 404)
       rescanAndBroadcast()
       return c.json({ ok: true, id })
@@ -263,6 +283,8 @@ export function createExtensionRoutes() {
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[Extensions] uninstall ${id} failed: ${msg}`)
       return c.json({ error: msg }, 500)
+    } finally {
+      held.resume()
     }
   })
 

@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseManifest, scanExtensions, getSnapshot, getExtension, getInstalledExtension, snapshotKey, readExtensionDir, extensionsRoot } from '../src/extensions/registry.js'
-import { confirmExtensionBackend, setExtensionDisabled } from '../src/extensions/state.js'
+import { confirmedBackendIds, confirmExtensionBackend, disabledExtensionIds, setExtensionDisabled } from '../src/extensions/state.js'
+import { backendIsolation } from '../src/tools/sandbox.js'
 
 /**
  * Contract: `~/.halo/global/extensions/<id>/` is the install. The scanner is
@@ -316,15 +317,61 @@ describe('scanExtensions (on-disk)', () => {
     expect(snapshotKey(scanExtensions())).toBe(on)
   })
 
-  it('a backend carries confirmed from .state.json, and confirming changes snapshotKey', () => {
+  it('a backend carries confirmed from .state.json and this host\'s isolation; confirming changes snapshotKey', () => {
     writeExt('vi', { ...ok, id: 'vi', backend: { entry: 'b.cjs' } })
     fs.writeFileSync(path.join(extensionsRoot(), 'vi', 'b.cjs'), '')
     const before = scanExtensions()
-    expect(getExtension('vi')?.backend).toEqual({ entry: 'b.cjs', confirmed: false })
+    const isolation = backendIsolation()
+    expect(getExtension('vi')?.backend).toEqual({ entry: 'b.cjs', confirmed: false, isolation })
     confirmExtensionBackend('vi')
     const after = scanExtensions()
-    expect(getExtension('vi')?.backend).toEqual({ entry: 'b.cjs', confirmed: true })
+    expect(getExtension('vi')?.backend).toEqual({ entry: 'b.cjs', confirmed: true, isolation })
     expect(snapshotKey(after)).not.toBe(snapshotKey(before))
+  })
+
+  // Review #3: confirmed → directory gone (manual rm, server up or down) →
+  // the same id back must ask again; the confirmation follows the disk.
+  it('drops a backend confirmation once <id>/ is gone from disk; the same id put back is unconfirmed', () => {
+    const vi = { ...ok, id: 'vi', backend: { entry: 'b.cjs' } }
+    writeExt('vi', vi, { 'index.html': '<html>', 'b.cjs': '' })
+    setExtensionDisabled('vi', true) // other state of the id survives
+    confirmExtensionBackend('vi')
+    expect(scanExtensions().disabled[0].backend?.confirmed).toBe(true)
+    fs.rmSync(path.join(extensionsRoot(), 'vi'), { recursive: true })
+    scanExtensions() // boot scan or watcher rescan — no in-memory state involved
+    expect(confirmedBackendIds().has('vi')).toBe(false)
+    expect(disabledExtensionIds().has('vi')).toBe(true)
+    writeExt('vi', vi, { 'index.html': '<html>', 'b.cjs': '' })
+    expect(scanExtensions().disabled[0].backend?.confirmed).toBe(false)
+  })
+
+  it('keeps the confirmation while an installer swap is in flight (.tmp-<id>-* / .old-<id>-* present)', () => {
+    writeExt('vi', { ...ok, id: 'vi', backend: { entry: 'b.cjs' } }, { 'index.html': '<html>', 'b.cjs': '' })
+    confirmExtensionBackend('vi')
+    const root = extensionsRoot()
+    // install.ts / ext.sh step 4: `<id>/` moved aside, the new copy not yet renamed in.
+    fs.renameSync(path.join(root, 'vi'), path.join(root, '.old-vi-a1b2c3'))
+    fs.mkdirSync(path.join(root, '.tmp-vi-123456'))
+    scanExtensions()
+    expect(confirmedBackendIds().has('vi')).toBe(true)
+    fs.rmSync(path.join(root, '.tmp-vi-123456'), { recursive: true })
+    scanExtensions() // .old still there — ext.sh removes it only after the rename
+    expect(confirmedBackendIds().has('vi')).toBe(true)
+    fs.renameSync(path.join(root, '.old-vi-a1b2c3'), path.join(root, 'vi'))
+    expect(scanExtensions().extensions[0].backend?.confirmed).toBe(true)
+  })
+
+  it('drops nothing when the root can\'t be listed', () => {
+    confirmExtensionBackend('vi') // creates the root with .state.json in it
+    const root = extensionsRoot()
+    fs.chmodSync(root, 0o300) // writable, not listable
+    try {
+      if (process.getuid?.() === 0) return // root lists anything
+      scanExtensions()
+    } finally {
+      fs.chmodSync(root, 0o755)
+    }
+    expect(confirmedBackendIds().has('vi')).toBe(true)
   })
 
   it('lists valid dirs, keeps invalid ones as errors, skips dot-dirs and files', () => {

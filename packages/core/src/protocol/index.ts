@@ -24,6 +24,7 @@ export type {
   ExtensionActivity,
   ExtensionChatbar,
   ExtensionBackend,
+  ExtensionBackendIsolation,
   ExtensionSettingField,
   ExtensionSettings,
   ExtensionInfo,

@@ -7,7 +7,10 @@
  *
  * An id without an entry is on and unconfirmed. A fresh install and an
  * uninstall drop the entry (forgetExtension); an update keeps it, so an
- * update of the same id is not asked about again. The file sits beside the extension dirs, not
+ * update of the same id is not asked about again. A confirmation whose
+ * directory vanished any other way (manual `rm -rf`, server down or not) is
+ * dropped by the next scan (registry.ts), so it never carries over to a later
+ * directory of the same id. The file sits beside the extension dirs, not
  * inside one: an update swaps the whole `<id>/` directory (install.ts), so a
  * flag in there would be lost; and as a direct child of the root its atomic
  * rename trips extensions/watcher.ts like any install does. Dot-named, so the
@@ -115,9 +118,28 @@ export function setExtensionDisabled(id: string, disabled: boolean): boolean {
 }
 
 /** Record the admin's confirmation of `id`'s backend. Returns false when it
- *  already was. Cleared only with the whole entry (forgetExtension). */
+ *  already was. Cleared with the whole entry (forgetExtension), or alone when
+ *  the scanner finds `<id>/` gone from disk (dropBackendConfirmations). */
 export function confirmExtensionBackend(id: string): boolean {
   return setFlag(id, 'backendConfirmed', true)
+}
+
+/** Clear the backend confirmation of `ids` (registry.ts scanExtensions: their
+ *  directory is gone from disk), other fields kept. One write for all;
+ *  false when none was set. */
+export function dropBackendConfirmations(ids: readonly string[]): boolean {
+  return update((states) => {
+    let changed = false
+    for (const id of ids) {
+      const cur = states[id]
+      if (!isEntry(cur) || cur.backendConfirmed !== true) continue
+      const { backendConfirmed: _, ...rest } = cur
+      if (Object.keys(rest).length > 0) states[id] = rest
+      else delete states[id]
+      changed = true
+    }
+    return changed
+  })
 }
 
 /** Drop everything stored for `id` (uninstall), so a reinstall starts fresh.
