@@ -14,6 +14,18 @@
  * resolves against the update.json URL; `sha256` is required; `minHalo` is
  * optional. Unknown fields are ignored so the format can grow.
  *
+ * An extension that ships native code (a manifest `backend` with a native
+ * module) has one zip per server platform, listed in `packages`:
+ *
+ *   "packages": { "linux-x64": { "url": "…-linux-x64.zip", "sha256": "…" },
+ *                 "darwin-arm64": { … }, "win-x64": { … } }
+ *
+ * keyed `<os>-<arch>` as npm native packages name them (hostPackagePlatform:
+ * `win` for win32). When present, this host's entry replaces the top-level
+ * url / sha256 (which stay required — the package a Halo that predates
+ * `packages` would fetch; minHalo keeps it from doing so); no entry for this
+ * host = nothing installable here.
+ *
  * The same id / version / sha256 then gate the install: the downloaded zip
  * must hash to `sha256`, and its manifest must carry the same id and version
  * (install.ts expectId / expectVersion).
@@ -40,6 +52,13 @@ export type UpdateVerdict =
 
 const SHA256_RE = /^[0-9a-f]{64}$/i
 const DEFAULT_HUB_REPO = 'turmind/halo-hub'
+
+/** This server's key in update.json `packages`: `linux-x64`, `darwin-arm64`,
+ *  `win-x64`, … (Node's platform / arch, `win32` written `win` like npm's
+ *  native packages — sherpa-onnx-win-x64). */
+export function hostPackagePlatform(): string {
+  return `${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`
+}
 
 /** Strict `x.y.z[-pre]` — the manifest rule (registry.ts VERSION_RE): no
  *  leading `v`, no `+build` (a package carrying one could never match). */
@@ -92,7 +111,7 @@ export function updateJsonUrl(id: string, source: string | undefined, hubBase: s
 /** Validate a fetched update.json against the extension it was fetched for.
  *  `fileUrl` = the URL it was finally read from (relative `url` resolves
  *  against it, after redirects). */
-export function parseUpdateJson(raw: unknown, fileUrl: string, expectId: string): UpdateInfo | { error: string } {
+export function parseUpdateJson(raw: unknown, fileUrl: string, expectId: string, platform = hostPackagePlatform()): UpdateInfo | { error: string } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { error: 'update.json must be a JSON object' }
   const u = raw as Record<string, unknown>
   // JSON.stringify, not String(): a parsed object like {"toString":0} makes String() throw.
@@ -104,11 +123,22 @@ export function parseUpdateJson(raw: unknown, fileUrl: string, expectId: string)
   if (url.protocol !== 'https:') return { error: `update.json url must be https: ${url.href}` }
   if (typeof u.sha256 !== 'string' || !SHA256_RE.test(u.sha256)) return { error: 'update.json sha256 must be 64 hex characters' }
   if (u.minHalo !== undefined && !isVersion(u.minHalo)) return { error: 'update.json minHalo must be semver (x.y.z[-pre])' }
+  let sha256 = u.sha256
+  if (u.packages !== undefined) {
+    if (typeof u.packages !== 'object' || u.packages === null || Array.isArray(u.packages)) return { error: 'update.json packages must be an object' }
+    if (!Object.hasOwn(u.packages, platform)) return { error: `update.json has no package for this server's platform (${platform})` }
+    const p = (u.packages as Record<string, unknown>)[platform] as Record<string, unknown> | null
+    if (typeof p?.url !== 'string' || p.url === '') return { error: `update.json packages.${platform}.url is required` }
+    try { url = new URL(p.url, fileUrl) } catch { return { error: `update.json packages.${platform}.url is invalid: ${p.url}` } }
+    if (url.protocol !== 'https:') return { error: `update.json packages.${platform}.url must be https: ${url.href}` }
+    if (typeof p.sha256 !== 'string' || !SHA256_RE.test(p.sha256)) return { error: `update.json packages.${platform}.sha256 must be 64 hex characters` }
+    sha256 = p.sha256
+  }
   return {
     id: expectId,
     version: u.version,
     url: url.href,
-    sha256: u.sha256.toLowerCase(),
+    sha256: sha256.toLowerCase(),
     ...(u.minHalo !== undefined ? { minHalo: u.minHalo as string } : {}),
   }
 }

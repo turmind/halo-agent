@@ -19,7 +19,8 @@ import { WebSocket } from 'ws'
  *  - HTTP is forwarded with the prefix stripped, the cookie dropped and the
  *    backend's Set-Cookie dropped; WS upgrades are piped both ways;
  *  - no request and no open WS for `idleMs` → the process exits; an open WS
- *    keeps it alive;
+ *    keeps it alive, and so does the backend's own IPC `busy: true` until it
+ *    sends `busy: false`;
  *  - a crashed backend is started again on the next request;
  *  - nothing starts before the admin confirmed it (.state.json
  *    `backendConfirmed`): 403 `backend-unconfirmed` over HTTP and WS;
@@ -54,6 +55,7 @@ const wss = new WebSocketServer({ noServer: true })
 wss.on('connection', (ws) => ws.on('message', (d, bin) => ws.send(bin ? d : 'echo:' + d.toString())))
 const server = http.createServer((req, res) => {
   if (req.url === '/crash') process.exit(3)
+  if (req.url === '/hold' || req.url === '/let-go') process.send({ type: 'busy', busy: req.url === '/hold' })
   let body = ''
   req.on('data', (c) => { body += c })
   req.on('end', () => {
@@ -171,6 +173,15 @@ describe('extension backends', () => {
     expect(backends.list()).toEqual([])
     const next = await (await get('/api/ext/idle/')).json()
     expect(next.pid).not.toBe(pid)
+  })
+
+  it('IPC busy: true holds it past idleMs with no client; busy: false lets the idle timer run', async () => {
+    install('busy')
+    const { pid } = await (await get('/api/ext/busy/hold')).json()
+    await sleep(IDLE_MS * 2.5)
+    expect(alive(pid)).toBe(true)
+    await get('/api/ext/busy/let-go')
+    await until(() => !alive(pid))
   })
 
   it('restarts a crashed backend on the next request', async () => {

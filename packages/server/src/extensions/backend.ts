@@ -17,7 +17,9 @@
  *   `{ type: 'ready' }` over IPC once it listens on `HALO_EXT_SOCKET` (push,
  *   no probe). No ready within READY_TIMEOUT_MS → killed, the request 502s.
  * - **Idle stop**: `active` counts in-flight HTTP requests + open WS; when it
- *   drops to 0 an idle timer starts, and after `idleMs` the child is
+ *   drops to 0 — and the backend isn't holding itself busy (IPC
+ *   `{ type: 'busy', busy: true }`, e.g. a model download nobody is watching
+ *   any more; `busy: false` lets go) — an idle timer starts, and after `idleMs` the child is
  *   SIGTERMed (SIGKILL after KILL_GRACE_MS). Exiting is the point: native
  *   arenas (onnxruntime, glibc) only go back to the OS with the process.
  * - **Crash**: the exit handler drops the entry; the next request starts a
@@ -94,6 +96,8 @@ interface Backend extends RunningBackend {
   ready: Promise<void>
   active: number
   idleTimer: ReturnType<typeof setTimeout> | null
+  /** The backend said `busy: true` (work of its own, no client attached). */
+  busy: boolean
   exited: Promise<void>
   stopping: boolean
   dead: boolean
@@ -213,7 +217,7 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
     const exited = new Promise<void>((r) => { exitCb = r })
     const b: Backend = {
       id: ext.id, socket, pid: child.pid, key: keyOf(ext), child, nodePid: undefined,
-      ready: Promise.resolve(), active: 0, idleTimer: null, exited, stopping: false, dead: false,
+      ready: Promise.resolve(), active: 0, idleTimer: null, busy: false, exited, stopping: false, dead: false,
     }
     b.ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -223,6 +227,11 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
       child.on('message', (m) => {
         const msg = m as { type?: unknown; pid?: unknown } | null
         if (msg?.type === 'halo:pid' && typeof msg.pid === 'number') b.nodePid = msg.pid
+        if (msg?.type === 'busy') {
+          b.busy = (msg as { busy?: unknown }).busy === true
+          if (b.busy && b.idleTimer) { clearTimeout(b.idleTimer); b.idleTimer = null }
+          else armIdle(b)
+        }
         if (msg?.type !== 'ready') return
         clearTimeout(timer)
         console.log(`[ExtBackend] ${ext.id}: ready in ${Date.now() - t0}ms pid=${child.pid}`)
@@ -252,7 +261,7 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
   }
 
   function armIdle(b: Backend): void {
-    if (b.dead || b.stopping || b.active > 0) return
+    if (b.dead || b.stopping || b.active > 0 || b.busy) return
     if (b.idleTimer) clearTimeout(b.idleTimer)
     b.idleTimer = setTimeout(() => stop(b, `idle ${Math.round(idleMs / 1000)}s`), idleMs)
     b.idleTimer.unref()

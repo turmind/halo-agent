@@ -101,6 +101,33 @@ describe('parseUpdateJson', () => {
   })
 })
 
+describe('parseUpdateJson — per-platform packages', () => {
+  const SHA2 = 'b'.repeat(64)
+  const multi = { ...good, packages: { 'linux-x64': { url: 'glb-1.2.0-linux-x64.zip', sha256: SHA2.toUpperCase() }, 'win-x64': { url: 'https://cdn.test/w.zip', sha256: SHA } } }
+  it('takes this platform\'s url + sha256 instead of the top-level pair', () => {
+    expect(parseUpdateJson(multi, FILE, 'glb', 'linux-x64')).toEqual({ id: 'glb', version: '1.2.0', url: 'https://raw.githubusercontent.com/turmind/halo-hub/main/extensions/glb/glb-1.2.0-linux-x64.zip', sha256: SHA2 })
+    expect((parseUpdateJson(multi, FILE, 'glb', 'win-x64') as UpdateInfo).url).toBe('https://cdn.test/w.zip')
+  })
+  it('defaults to this host (hostPackagePlatform)', async () => {
+    const { hostPackagePlatform } = await import('../src/updates/update-json.js')
+    const host = hostPackagePlatform()
+    expect(host).toMatch(/^(linux|darwin|win)-[a-z0-9]+$/)
+    const r = parseUpdateJson({ ...good, packages: { [host]: { url: 'mine.zip', sha256: SHA2 } } }, FILE, 'glb') as UpdateInfo
+    expect(r.url.endsWith('/mine.zip')).toBe(true)
+  })
+  it.each([
+    ['no entry for this platform', multi, /no package for this server's platform \(darwin-arm64\)/],
+    ['packages not an object', { ...good, packages: [] }, /packages must be an object/],
+    ['entry url missing', { ...good, packages: { 'darwin-arm64': { sha256: SHA } } }, /packages\.darwin-arm64\.url is required/],
+    ['entry url not https', { ...good, packages: { 'darwin-arm64': { url: 'http://x/z.zip', sha256: SHA } } }, /must be https/],
+    ['entry sha256 bad', { ...good, packages: { 'darwin-arm64': { url: 'z.zip', sha256: 'x' } } }, /packages\.darwin-arm64\.sha256 must be 64 hex/],
+    ['inherited key', { ...good, packages: {} }, /no package/],
+  ])('rejects %s', (_name, raw, msg) => {
+    const r = parseUpdateJson(raw, FILE, 'glb', _name === 'inherited key' ? 'constructor' : 'darwin-arm64')
+    expect('error' in r && r.error).toMatch(msg)
+  })
+})
+
 describe('judgeUpdate', () => {
   it('offers a strictly newer version', () => {
     expect(judgeUpdate('1.1.0', info(), '2.0.1')).toEqual({ kind: 'available', version: '1.2.0' })

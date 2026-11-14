@@ -208,7 +208,10 @@ hub_check_min_halo() {
 # only (redirects too, ≤ 5), update.json ≤ 64 KB / 10 s, zip ≤ 100 MB (10 min,
 # aborted after 30 s under 1 KB/s); a relative `url` resolves against
 # update.json's final (redirected) URL; `minHalo` is checked against this
-# Halo; the zip must hash to its `sha256`. Echo the zip path; the version it
+# Halo; the zip must hash to its `sha256`. An update.json with `packages`
+# (one zip per server platform, keyed like npm native packages: linux-x64,
+# darwin-arm64, win-x64…) gives this machine's entry instead (the server's
+# update-json.ts parseUpdateJson). Echo the zip path; the version it
 # promises goes to $3/want-version for the manifest check after unpacking.
 hub_fetch_update() {
   local base=$1 id=$2 tmp=$3 json final line url sha ver min got
@@ -232,7 +235,19 @@ hub_fetch_update() {
     if (url.protocol !== "https:") fail("url must be https: " + url.href)
     if (typeof u.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(u.sha256)) fail("sha256 must be 64 hex characters")
     if (u.minHalo !== undefined && (typeof u.minHalo !== "string" || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(u.minHalo))) fail("minHalo must be semver (x.y.z[-pre])")
-    console.log(url.href + " " + u.sha256.toLowerCase() + " " + u.version + " " + (u.minHalo || ""))
+    let sha = u.sha256
+    if (u.packages !== undefined) {
+      const plat = (process.platform === "win32" ? "win" : process.platform) + "-" + process.arch
+      if (!u.packages || typeof u.packages !== "object" || Array.isArray(u.packages)) fail("packages must be an object")
+      if (!Object.hasOwn(u.packages, plat)) fail("no package for this server platform (" + plat + ")")
+      const p = u.packages[plat] || {}
+      if (typeof p.url !== "string" || p.url === "") fail("packages." + plat + ".url is required")
+      try { url = new URL(p.url, base) } catch { fail("packages." + plat + ".url is invalid: " + p.url) }
+      if (url.protocol !== "https:") fail("packages." + plat + ".url must be https: " + url.href)
+      if (typeof p.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(p.sha256)) fail("packages." + plat + ".sha256 must be 64 hex characters")
+      sha = p.sha256
+    }
+    console.log(url.href + " " + sha.toLowerCase() + " " + u.version + " " + (u.minHalo || ""))
   ' "$tmp/update.json" "$final" "$id") || { echo "invalid update.json at $final: $line" >&2; exit 1; }
   read -r url sha ver min <<<"$line"
   if [[ -n $min ]]; then hub_check_min_halo "$id" "$ver" "$min" || exit 1; fi

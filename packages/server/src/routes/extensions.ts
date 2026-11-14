@@ -44,7 +44,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { imageMimeFromExt } from '@turmind/halo-core'
-import { extensionsRoot, getInstalledExtension, getSnapshot, isExtensionId } from '../extensions/registry.js'
+import { extensionsRoot, getExtension, getInstalledExtension, getSnapshot, isExtensionId } from '../extensions/registry.js'
+import { extensionBackends } from '../extensions/backend.js'
 import { ExtensionInstallError, installExtensionZip, uninstallExtension } from '../extensions/install.js'
 import { confirmExtensionBackend, setExtensionDisabled } from '../extensions/state.js'
 import { rescanAndBroadcast } from '../extensions/watcher.js'
@@ -178,6 +179,9 @@ export function createExtensionRoutes() {
   // starts none without it, whichever way the extension was installed. Kept
   // across updates of the same id, dropped on uninstall / fresh install.
   // Idempotent like PATCH: a repeat writes nothing and pushes nothing.
+  // A fresh confirmation also starts the backend once (if switched on) so it
+  // can prepare before first use — a speech backend fetches its models — and
+  // lets it idle out as usual.
   app.post('/extensions/:id/confirm-backend', (c) => {
     const id = c.req.param('id')
     if (!isExtensionId(id)) return c.json({ error: 'Invalid extension id' }, 400)
@@ -188,6 +192,12 @@ export function createExtensionRoutes() {
       if (confirmExtensionBackend(id)) {
         console.log(`[Extensions] ${id}@${ext.version} backend confirmed`)
         rescanAndBroadcast()
+        const on = getExtension(id)
+        if (on?.backend) {
+          void extensionBackends.acquire(on).then((b) => extensionBackends.release(b), (err) => {
+            console.warn(`[Extensions] ${id}: backend did not start after confirmation: ${err instanceof Error ? err.message : String(err)}`)
+          })
+        }
       }
       return c.json({ ok: true, id })
     } catch (err) {

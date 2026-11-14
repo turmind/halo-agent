@@ -267,6 +267,32 @@ describe('install <id> via update.json (local https hub)', () => {
     expect((await install()).err).toMatch(/invalid update.json .*minHalo must be semver/)
   })
 
+  it('packages: installs this platform\'s zip (its own sha256), refuses a platform the hub has no zip for', async () => {
+    const plat = `${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`
+    const mine = await zipOf('8.0.0')
+    await publish('8.0.0', { json: { packages: { [plat]: { url: '../files/demo-8.0.0.zip', sha256: createHash('sha256').update(mine).digest('hex') } }, sha256: 'c'.repeat(64) } })
+    const r = await install()
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('installed demo 8.0.0')
+    await publish('8.0.1', { json: { packages: { 'plan9-mips': { url: 'x.zip', sha256: 'c'.repeat(64) } } } })
+    expect((await install()).err).toMatch(new RegExp(`invalid update.json .*no package for this server platform \\(${plat}\\)`))
+  })
+
+  it('a backend extension prints that it needs confirming; no hint once confirmed', async () => {
+    const zip = await zipOf('9.0.0', { backend: { entry: 'index.html'.replace('html', 'cjs') } })
+    const { default: JSZip } = await import('jszip')
+    const z = await JSZip.loadAsync(zip)
+    z.file('demo/index.cjs', '')
+    const withBackend = await z.generateAsync({ type: 'nodebuffer', platform: 'UNIX' })
+    await publish('9.0.0', { zip: withBackend })
+    let r = await install()
+    expect(r.out.split('\n')).toEqual(['installed demo 9.0.0', expect.stringMatching(/^backend not confirmed: demo .* Settings → Extensions$/)])
+    const state = path.join(path.dirname(installed()), '.state.json')
+    fs.writeFileSync(state, JSON.stringify({ demo: { backendConfirmed: true } }))
+    r = await install()
+    expect(r.out).toBe('installed demo 9.0.0')
+  })
+
   it('no update.json (404) → clear error', async () => {
     routes = {}
     const r = await install()
