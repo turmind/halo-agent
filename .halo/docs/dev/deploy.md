@@ -356,16 +356,16 @@ Use only for a new public release; the retained details here are not extra prepa
 
 The published package carries its npm dependencies bundled in `dist/` (~15 MB, code-split by esbuild): the entry `dist/index.js` (~60 KB), the evo wrapper the server spawns as its own process (`dist/evo-wrapper.js`; `build-bundle.mjs` fails without it), ~100 flat `<name>-<hash>.js` chunks — each lazily `import()`ed path (TUI, OTel, Telegram / WeCom / WeChat QR, image decoding, …) is its own chunk, read only when used — the Feishu SDK (`dist/feishu-sdk.cjs`, see [feishu.md](../design/feishu.md#sdk-loading)) and the bundled packages' license texts (`dist/third-party-licenses.txt`); plus all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Its only npm dependencies are the native modules (better-sqlite3, node-pty, sherpa-onnx-node, @parcel/watcher) and the headless xterm pair (`@xterm/headless`, `@xterm/addon-serialize`), which the terminal loads with a synchronous `require`. Total install footprint is about 120 MB on disk (`du`, x86_64; 2.2.6 is about 290 MB); npm's own cache adds about 45 MB.
 
-Bundling pins every other dependency at the version in `pnpm-lock.yaml` when the package is built, where an unbundled install took the newest version within each range at install time — security fixes in a dependency reach users only through a new Halo release. Before a release, bump the bundled deps to their latest patch and audit:
+Bundling pins every other dependency at the version in `pnpm-lock.yaml` when the package is built, where an unbundled install took the newest version within each range at install time — security fixes in a dependency reach users only through a new Halo release. Before a release, re-resolve the bundled deps to the newest version within their declared ranges — the same resolution `npm install -g` used to do on the user's machine — and audit:
 
 ```bash
-for p in core server cli; do (cd packages/$p && npx npm-check-updates@17 --dep prod --target patch \
-  --reject '/^@turmind\/|^(better-sqlite3|node-pty|sherpa-onnx-node|@parcel\/watcher)$/' -u); done
-pnpm install
+pnpm update -r --prod --no-save \
+  --filter @turmind/halo-core --filter @turmind/halo-server --filter @turmind/halo-cli --filter @turmind/halo-acp-adapter \
+  '!@turmind/*' '!better-sqlite3' '!node-pty' '!sherpa-onnx-node' '!@parcel/watcher' '!@xterm/headless' '!@xterm/addon-serialize'
 pnpm audit --prod   # findings under packages__server / __cli / __core ship in the bundle
 ```
 
-Patch-only bumps the declared ranges in place; transitive deps move only as far as those bumps pull them. `pnpm update -r --prod --filter @turmind/halo-server --filter @turmind/halo-core --filter @turmind/halo-cli` instead takes the newest version within every range (what an unbundled install used to get) — larger diff, more audit findings closed. Either way, run the tests before cutting the release.
+`--no-save` rewrites only `pnpm-lock.yaml`, never the ranges in `package.json`; the native / xterm externals are installed by npm on the user's machine anyway. A finding fixable inside its major goes into `pnpm-workspace.yaml` `overrides` (with a `# via` comment); one that needs a major bump is a code change of its own. `overrides` also holds ceilings: npm honours peer ranges that pnpm only warns about (`pnpm peers check`), so a peer the bundle would otherwise break on gets capped there (`@opentelemetry/api`). Then run the server / cli tests and the bundle build before cutting the release.
 
 Two log files: `~/.halo/logs/server.log` is the stdout/stderr capture of `halo server start -d`, whether the user unit or the off-systemd supervisor runs it (what `halo server logs` tails; the supervisor's `[respawn]` lines appear only off systemd; a system unit logs to the journal instead); `~/.halo/global/logs/server.log` is the server's structured, rotated log (level `general.logging.level`, default `warn`).
 
