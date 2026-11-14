@@ -159,8 +159,7 @@ fast-staging nor `npmRebuild:false` touches that; it runs on every build.
 `cli-runtime` used to duplicate most of `server-runtime`'s deps (it was
 ~137 MB); since the cli bundle inlines its pure-JS deps into `dist/` (see
 [deploy.md](deploy.md)), its `node_modules` holds only the native / sync-required
-externals (better-sqlite3, node-pty, sherpa-onnx-node, @parcel/watcher,
-@xterm/*) — not re-measured for the desktop stage. The Feishu SDK sits in
+externals (better-sqlite3, node-pty, @parcel/watcher, @xterm/*) — not re-measured for the desktop stage. The Feishu SDK sits in
 server-runtime's `node_modules`; the cli bundle carries it as `dist/feishu-sdk.cjs`.
 
 ## Why `CI=true` is mandatory

@@ -53,7 +53,7 @@ Nginx is **not required**. Use it only for domain routing, SSL termination, or w
 - pnpm 11 — source builds only (pinned by the root `packageManager`; `corepack enable` picks it up)
 - AWS credentials — optional, only for the Bedrock providers (`~/.aws/credentials`, env vars, or an instance role)
 - bubblewrap (Linux) — needed for the `workspace` / `readonly` access levels: `sudo apt install bubblewrap`; on Ubuntu 23.10+ / 24.04 also the [AppArmor profile](#bubblewrap-on-ubuntu-2310-and-2404-apparmor)
-- RAM — 1 GB recommended; a 0.5 GB box only with a 1 GB swap file persisted in `/etc/fstab` ([Memory and swap](#memory-and-swap)). Disk: about 120 MB for the install, plus about 45 MB of npm cache
+- RAM — 1 GB recommended; a 0.5 GB box only with a 1 GB swap file persisted in `/etc/fstab` ([Memory and swap](#memory-and-swap)). Disk: about 87 MB for the install, plus about 31 MB of npm cache
 
 ### Memory and swap
 
@@ -69,7 +69,7 @@ Measured on Halo 2.2.5, fresh Ubuntu 24.04 arm64 EC2 (t4g.nano 0.5 GB, t4g.micro
 
 Agent `shell_exec` work (builds, scripts) comes on top of these.
 
-Since dependencies are bundled (after 2.2.6) these are upper bounds; the arm64 table hasn't been re-measured. Same method before / after on an x86_64 box: `npm install -g` peak 596 → 262 MB, server idle (5 min) 133 → 95 MB, a `halo --version` call 195 → 49 MB.
+Since dependencies are bundled (after 2.2.6) these are upper bounds; the arm64 table hasn't been re-measured. Same method before / after on an x86_64 box: `npm install -g` peak 596 → 262 MB, server idle (5 min) 133 → 95 MB, a `halo --version` call 195 → 49 MB. 2.2.7 → 2.3.0 (sherpa-onnx out of the install), same box and method: install 119 → 87 MB on disk, npm cache 43 → 31 MB, server idle unchanged (at 5 min 96.5 / 98.6 MB for 2.2.7 and 100.0 / 98.2 MB for 2.3.0 over two runs each — run-to-run noise; sherpa-onnx was only loaded on first use).
 
 - **1 GB (t4g.micro)**: the recommended minimum. Install and typical use passed with no swap and at least 390 MB still available. With local speech-to-text, add swap or use 2 GB (it needs ≈ 400–570 MB only while dictating / recording, and gives it back when idle).
 - **0.5 GB (t4g.nano)**: only with a 1 GB swap file. Without it, `apt-get install nodejs` and `npm install -g` are OOM-killed, and an installed server is killed by any ~60 MB transient (a `halo` CLI call, the SSM agent's document worker). With swap everything ran at micro's speed, except the first page load / editor open after idle (+0.7–1 s). Fit for a single-user trial, not a deployment.
@@ -354,7 +354,7 @@ Use only for a new public release; the retained details here are not extra prepa
 
 **npm token gotcha**: `npm publish` on this package needs a granular access token created with **"Bypass 2FA"** checked — scope / permission alone yields `403 Two-factor authentication or granular access token with bypass 2fa enabled is required`. `npm whoami` and `npm token list` succeed with a non-bypass token, so neither is a valid pre-flight; check `GET https://registry.npmjs.org/-/npm/v1/tokens` (with the token as bearer) and look for `"bypass_2fa": true` on the token in use before starting a release.
 
-The published package carries its npm dependencies bundled in `dist/` (~15 MB, code-split by esbuild): the entry `dist/index.js` (~60 KB), the evo wrapper the server spawns as its own process (`dist/evo-wrapper.js`; `build-bundle.mjs` fails without it), ~100 flat `<name>-<hash>.js` chunks — each lazily `import()`ed path (TUI, OTel, Telegram / WeCom / WeChat QR, image decoding, …) is its own chunk, read only when used — the Feishu SDK (`dist/feishu-sdk.cjs`, see [feishu.md](../design/feishu.md#sdk-loading)) and the bundled packages' license texts (`dist/third-party-licenses.txt`: each package's own license / notice files, or — for the few that ship none — the standard text of the license their `package.json` declares from `packages/cli/scripts/licenses/`; the deps' in-source license comments stay at the end of each chunk); plus all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Its only npm dependencies are the native modules (better-sqlite3, node-pty, sherpa-onnx-node, @parcel/watcher) and the headless xterm pair (`@xterm/headless`, `@xterm/addon-serialize`), which the terminal loads with a synchronous `require`. Total install footprint is about 120 MB on disk (`du`, x86_64; 2.2.6 is about 290 MB); npm's own cache adds about 45 MB.
+The published package carries its npm dependencies bundled in `dist/` (~15 MB, code-split by esbuild): the entry `dist/index.js` (~60 KB), the evo wrapper the server spawns as its own process (`dist/evo-wrapper.js`; `build-bundle.mjs` fails without it), ~100 flat `<name>-<hash>.js` chunks — each lazily `import()`ed path (TUI, OTel, Telegram / WeCom / WeChat QR, image decoding, …) is its own chunk, read only when used — the Feishu SDK (`dist/feishu-sdk.cjs`, see [feishu.md](../design/feishu.md#sdk-loading)) and the bundled packages' license texts (`dist/third-party-licenses.txt`: each package's own license / notice files, or — for the few that ship none — the standard text of the license their `package.json` declares from `packages/cli/scripts/licenses/`; the deps' in-source license comments stay at the end of each chunk); plus all built-in templates (agents / skills / prompts / models), bundled platform docs, and the admin Web UI static export. Its only npm dependencies are the native modules (better-sqlite3, node-pty, @parcel/watcher) and the headless xterm pair (`@xterm/headless`, `@xterm/addon-serialize`), which the terminal loads with a synchronous `require`. Total install footprint is about 87 MB on disk (`du`, x86_64; 2.2.7 is about 120 MB with sherpa-onnx, 2.2.6 about 290 MB); npm's own cache adds about 31 MB.
 
 After the build, `build-bundle.mjs` fails when: a lazily loaded dep (OTel, the Telegram / WeCom SDKs, the WeChat QR encoder, ink / react / marked, jimp, undici) is statically reachable from a startup root (`index.js`, `evo-wrapper.js`, the server chunk, the harness chunk); or an `import()` of a bundled dep yields other export names than Node's own `import()` gives the original file (the CommonJS named-export case `cjsDynamicImportPlugin` covers).
 
@@ -363,7 +363,7 @@ Bundling pins every other dependency at the version in `pnpm-lock.yaml` when the
 ```bash
 pnpm update -r --prod --no-save \
   --filter @turmind/halo-core --filter @turmind/halo-server --filter @turmind/halo-cli --filter @turmind/halo-acp-adapter \
-  '!@turmind/*' '!better-sqlite3' '!node-pty' '!sherpa-onnx-node' '!@parcel/watcher' '!@xterm/headless' '!@xterm/addon-serialize'
+  '!@turmind/*' '!better-sqlite3' '!node-pty' '!@parcel/watcher' '!@xterm/headless' '!@xterm/addon-serialize'
 pnpm audit --prod   # findings under packages__server / __cli / __core ship in the bundle
 ```
 
