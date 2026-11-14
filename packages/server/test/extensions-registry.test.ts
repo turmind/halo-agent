@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseManifest, scanExtensions, getSnapshot, getExtension, getInstalledExtension, snapshotKey, readExtensionDir, extensionsRoot } from '../src/extensions/registry.js'
-import { setExtensionDisabled } from '../src/extensions/state.js'
+import { confirmExtensionBackend, setExtensionDisabled } from '../src/extensions/state.js'
 
 /**
  * Contract: `~/.halo/global/extensions/<id>/` is the install. The scanner is
@@ -314,6 +314,17 @@ describe('scanExtensions (on-disk)', () => {
     expect(off).not.toBe(on)
     setExtensionDisabled('glb', false)
     expect(snapshotKey(scanExtensions())).toBe(on)
+  })
+
+  it('a backend carries confirmed from .state.json, and confirming changes snapshotKey', () => {
+    writeExt('vi', { ...ok, id: 'vi', backend: { entry: 'b.cjs' } })
+    fs.writeFileSync(path.join(extensionsRoot(), 'vi', 'b.cjs'), '')
+    const before = scanExtensions()
+    expect(getExtension('vi')?.backend).toEqual({ entry: 'b.cjs', confirmed: false })
+    confirmExtensionBackend('vi')
+    const after = scanExtensions()
+    expect(getExtension('vi')?.backend).toEqual({ entry: 'b.cjs', confirmed: true })
+    expect(snapshotKey(after)).not.toBe(snapshotKey(before))
   })
 
   it('lists valid dirs, keeps invalid ones as errors, skips dot-dirs and files', () => {

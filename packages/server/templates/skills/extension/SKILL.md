@@ -50,9 +50,15 @@ https://github.com/turmind/halo-hub.
 
 The script unpacks to a temp dir, pre-checks `halo-extension.json` (id matches,
 entry exists), then atomically replaces `~/.halo/global/extensions/<id>/`.
-Reinstalling the same id upgrades (or downgrades) it. Relay the script's last
-line to the user (`installed glb 1.0.0` / the error). Never edit files inside an
-installed extension — reinstall instead.
+Reinstalling the same id upgrades (or downgrades) it. Relay the script's
+`installed glb 1.0.0` line (or the error) to the user. Never edit files inside
+an installed extension — reinstall instead.
+
+If it also prints `backend not confirmed: …`, the extension ships a program
+that runs on the server, and it stays stopped until an admin confirms it: tell
+the user to open **Settings → Extensions** and press **Confirm** on that row
+before using it (until then its features report that it needs confirming).
+You cannot confirm it yourself.
 
 On failure relay the script's hint. "no update.json for <id>" → the id isn't on
 that hub, or `hub_base` is wrong. "no hub_base set" → `hub_repo` isn't on GitHub,

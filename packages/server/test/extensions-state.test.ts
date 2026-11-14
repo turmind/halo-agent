@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { disabledExtensionIds, extensionStatePath, ExtensionStateError, forgetExtension, setExtensionDisabled } from '../src/extensions/state.js'
+import { confirmedBackendIds, confirmExtensionBackend, disabledExtensionIds, extensionStatePath, ExtensionStateError, forgetExtension, setExtensionDisabled } from '../src/extensions/state.js'
 
 /**
  * extensions/state.ts — the on / off switch store (`extensions/.state.json`):
@@ -88,6 +88,19 @@ describe('extension on / off state', () => {
     vi.restoreAllMocks()
     expect(read()).toEqual({ glb: { disabled: true }, obj: { disabled: true } })
     expect(fs.readdirSync(path.dirname(extensionStatePath()))).toEqual(['.state.json'])
+  })
+
+  it('backend confirmation: one flag per id, idempotent, kept by the on / off switch, dropped by forgetExtension', () => {
+    expect([...confirmedBackendIds()]).toEqual([])
+    expect(confirmExtensionBackend('voice-input')).toBe(true)
+    expect(confirmExtensionBackend('voice-input')).toBe(false)
+    expect(read()).toEqual({ 'voice-input': { backendConfirmed: true } })
+    setExtensionDisabled('voice-input', true)
+    setExtensionDisabled('voice-input', false)
+    expect(read()).toEqual({ 'voice-input': { backendConfirmed: true } })
+    expect([...confirmedBackendIds()]).toEqual(['voice-input'])
+    forgetExtension('voice-input')
+    expect([...confirmedBackendIds()]).toEqual([])
   })
 
   it('forgetExtension drops the whole entry; nothing stored = false', () => {

@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { ExtensionActivity, ExtensionBackend, ExtensionCapability, ExtensionChatbar, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { globalExtensionsDir } from '../paths.js'
-import { disabledExtensionIds } from './state.js'
+import { confirmedBackendIds, disabledExtensionIds } from './state.js'
 
 export const MANIFEST_FILE = 'halo-extension.json'
 
@@ -275,6 +275,8 @@ export function readExtensionDir(dir: string, id: string = path.basename(dir)): 
   // reinstall counts as "newer" for the admin's newest-default-wins rule.
   let installedAt = 0
   try { installedAt = Math.round(fs.statSync(dir).mtimeMs) } catch { /* raced with an uninstall — 0 sorts last */ }
+  // The admin's confirmation lives in .state.json, not the manifest.
+  if (parsed.backend) parsed.backend.confirmed = confirmedBackendIds().has(id)
   return { ...parsed, installedAt }
 }
 
@@ -329,13 +331,14 @@ export function getInstalledExtension(id: string): ExtensionInfo | undefined {
 }
 
 /** Cheap change detection for the watcher: id@version per extension, the
- *  switched-off ones marked `-`, plus the error list. Staging-dir churn during
- *  an install produces identical keys (staging dirs are skipped), so no
- *  spurious broadcast. */
+ *  switched-off ones marked `-`, an unconfirmed backend marked `?`, plus the
+ *  error list. Staging-dir churn during an install produces identical keys
+ *  (staging dirs are skipped), so no spurious broadcast. */
 export function snapshotKey(s: ExtensionsSnapshot): string {
+  const key = (e: ExtensionInfo) => `${e.id}@${e.version}#${e.installedAt}${e.backend && !e.backend.confirmed ? '?' : ''}`
   return [
-    ...s.extensions.map((e) => `${e.id}@${e.version}#${e.installedAt}`),
-    ...s.disabled.map((e) => `-${e.id}@${e.version}#${e.installedAt}`),
+    ...s.extensions.map(key),
+    ...s.disabled.map((e) => `-${key(e)}`),
     ...s.errors.map((e) => `!${e.id}:${e.error}`),
   ].join('\n')
 }

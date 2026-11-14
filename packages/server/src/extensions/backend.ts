@@ -6,6 +6,11 @@
  * backend does: the server only starts it, routes to it, and stops it.
  *
  * Lifecycle (per extension id, at most one process):
+ * - **Confirmation gate**: nothing starts until an admin confirmed this id's
+ *   backend in Settings → Extensions (state.ts `backendConfirmed`, read from
+ *   disk on every acquire — whatever installed it: upload, update, the skill,
+ *   a directory drop). Unconfirmed → BackendUnconfirmedError, which the proxy
+ *   answers 403 `backend-unconfirmed` so the extension can say where to go.
  * - **Start** on the first request (`acquire`): `process.execPath <entry>`,
  *   cwd = the extension directory (so its own `node_modules` resolve), an IPC
  *   channel, and the env contract below. Ready = the child sent
@@ -46,6 +51,7 @@ import { cleanChildEnv } from '../child-env.js'
 import { getServerParam, getServerSecret } from '../config.js'
 import { globalExtensionDataDir } from '../paths.js'
 import { extensionsRoot, getExtension } from './registry.js'
+import { confirmedBackendIds } from './state.js'
 
 /** No request and no open WS for this long → the process is stopped. */
 export const BACKEND_IDLE_MS = 5 * 60_000
@@ -81,7 +87,8 @@ interface Backend extends RunningBackend {
 
 export interface ExtensionBackends {
   /** Start (or reuse) the backend and count one user; pair with `release`.
-   *  Rejects when it can't start (message includes the stderr tail). */
+   *  Rejects with BackendUnconfirmedError before an admin confirmed it, else
+   *  when it can't start (message includes the stderr tail). */
   acquire(ext: ExtensionInfo): Promise<RunningBackend>
   release(b: RunningBackend): void
   /** Stop backends whose extension is gone, off, or changed. */
@@ -96,6 +103,13 @@ export interface ExtensionBackendsOptions {
   readyTimeoutMs?: number
   /** Extension directory; default `<extensionsRoot>/<id>`. */
   extensionDir?: (id: string) => string
+}
+
+/** acquire() of a backend no admin confirmed yet. */
+export class BackendUnconfirmedError extends Error {
+  constructor(id: string) {
+    super(`the backend of extension ${id} is not confirmed — confirm it in Settings → Extensions`)
+  }
 }
 
 const keyOf = (ext: ExtensionInfo) => `${ext.version}#${ext.installedAt}`
@@ -216,6 +230,7 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
 
   return {
     async acquire(ext) {
+      if (!confirmedBackendIds().has(ext.id)) throw new BackendUnconfirmedError(ext.id)
       let b = running.get(ext.id)
       if (b && b.key !== keyOf(ext)) {
         stop(b, 'extension changed')

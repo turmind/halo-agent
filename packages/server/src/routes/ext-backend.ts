@@ -10,7 +10,10 @@
  * cookie is stripped before forwarding (a backend never needs the login), and
  * a backend's `Set-Cookie` is dropped (it must not set cookies on the admin
  * origin). Unknown, switched-off or backend-less extension → 404; a backend
- * that can't start → 502 with the reason.
+ * no admin confirmed yet → 403 `{ code: 'backend-unconfirmed' }` (a WS just
+ * gets the 403 status line — the browser can't read it, so an extension
+ * whose socket never opened asks over HTTP to learn why); a backend that
+ * can't start → 502 with the reason.
  *
  * Each in-flight request and each open WS counts as one user of the backend
  * (acquire / release), which is what keeps it from idling out.
@@ -21,7 +24,7 @@ import { Readable } from 'node:stream'
 import { Hono, type Context } from 'hono'
 import { getTokenFromCookieHeader, isAuthenticated } from '../middleware/auth.js'
 import { isExtensionId } from '../extensions/registry.js'
-import { backendExtension, extensionBackends, type ExtensionBackends } from '../extensions/backend.js'
+import { backendExtension, BackendUnconfirmedError, extensionBackends, type ExtensionBackends } from '../extensions/backend.js'
 
 export const EXT_BACKEND_PREFIX = '/api/ext/'
 
@@ -71,6 +74,7 @@ export function createExtBackendRoutes(backends: ExtensionBackends = extensionBa
     try {
       b = await backends.acquire(ext)
     } catch (err) {
+      if (err instanceof BackendUnconfirmedError) return c.json({ error: err.message, code: 'backend-unconfirmed' }, 403)
       return c.json({ error: `extension backend unavailable: ${errMsg(err)}` }, 502)
     }
     const req = c.req.raw
@@ -149,6 +153,7 @@ export function createExtBackendUpgrade(backends: ExtensionBackends = extensionB
       })
       up.end()
     }, (err) => {
+      if (err instanceof BackendUnconfirmedError) return reject(socket, '403 Forbidden')
       console.warn(`[ExtBackend] ${split.id}: ${errMsg(err)}`)
       reject(socket, '502 Bad Gateway')
     })

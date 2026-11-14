@@ -21,6 +21,8 @@ import { WebSocket } from 'ws'
  *  - no request and no open WS for `idleMs` → the process exits; an open WS
  *    keeps it alive;
  *  - a crashed backend is started again on the next request;
+ *  - nothing starts before the admin confirmed it (.state.json
+ *    `backendConfirmed`): 403 `backend-unconfirmed` over HTTP and WS;
  *  - unknown / backend-less extension → 404, no cookie → 401 (WS);
  *  - reconcile() stops a removed or changed extension's backend; close()
  *    stops every one.
@@ -37,6 +39,7 @@ vi.mock('../src/extensions/registry.js', async (importOriginal) => ({
 }))
 
 const { createExtensionBackends } = await import('../src/extensions/backend.js')
+const { confirmExtensionBackend, forgetExtension } = await import('../src/extensions/state.js')
 const { createExtBackendRoutes, createExtBackendUpgrade, EXT_BACKEND_PREFIX } = await import('../src/routes/ext-backend.js')
 const { createUpgradeRouter } = await import('../src/ws/upgrade-router.js')
 
@@ -73,10 +76,11 @@ const IDLE_MS = 400
 function ext(id: string, extra: Record<string, unknown> = {}) {
   return { id, name: id, version: '1.0.0', extensions: [], entry: 'index.html', priority: 'default', capabilities: [], bundle: false, installedAt: 1, backend: { entry: 'backend/main.cjs' }, ...extra }
 }
-function install(id: string, src = BACKEND_SRC, extra: Record<string, unknown> = {}) {
+function install(id: string, src = BACKEND_SRC, extra: Record<string, unknown> = {}, confirmed = true) {
   fs.mkdirSync(path.join(root, id, 'backend'), { recursive: true })
   fs.writeFileSync(path.join(root, id, 'backend', 'main.cjs'), src)
   installed[id] = ext(id, extra)
+  if (confirmed) confirmExtensionBackend(id)
 }
 const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -100,7 +104,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await backends.close()
-  for (const k of Object.keys(installed)) delete installed[k]
+  for (const k of Object.keys(installed)) { delete installed[k]; forgetExtension(k) }
 })
 
 afterAll(async () => {
@@ -140,6 +144,23 @@ describe('extension backends', () => {
     expect((await get('/api/ext/plain/x')).status).toBe(404)
     expect((await get('/api/ext/..%2Fetc/x')).status).toBe(404)
     expect(backends.list()).toEqual([])
+  })
+
+  it('starts nothing before the admin confirmed it: 403 backend-unconfirmed (HTTP and WS)', async () => {
+    install('gated', BACKEND_SRC, {}, false)
+    const res = await get('/api/ext/gated/x')
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ code: 'backend-unconfirmed' })
+    const wsStatus = await new Promise<number>((resolve) => {
+      const ws = new WebSocket(`${base.replace('http', 'ws')}/api/ext/gated/stream`, { headers: { cookie: 'halo_token=good' } })
+      ws.on('unexpected-response', (_req, r) => resolve(r.statusCode ?? 0))
+      ws.on('open', () => { ws.close(); resolve(101) })
+      ws.on('error', () => {})
+    })
+    expect(wsStatus).toBe(403)
+    expect(backends.list()).toEqual([])
+    confirmExtensionBackend('gated')
+    expect((await get('/api/ext/gated/x')).status).toBe(200)
   })
 
   it('exits after idleMs without requests and starts again on the next one', async () => {

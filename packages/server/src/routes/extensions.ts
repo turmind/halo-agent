@@ -4,12 +4,13 @@
  *   GET    /extensions                                installed list (on + off + error entries)
  *   POST   /extensions/install                        multipart `file` = zip → install / upgrade
  *   PATCH  /extensions/:id                            `{ enabled }` → switch on / off (state.ts)
+ *   POST   /extensions/:id/confirm-backend            admin confirms the manifest `backend` (state.ts)
  *   POST   /extensions/:id/update                     install the newer version its update.json names
  *   DELETE /extensions/:id                            uninstall
  *   GET    /extensions/token                          short-lived asset token for the iframe URL
  *   GET    /extensions/:id/:version/:token/<asset>    static file from the extension dir
  *
- * The first five sit behind the admin cookie (index.ts mounts this router
+ * The first six sit behind the admin cookie (index.ts mounts this router
  * under /api, which authMiddleware guards). The static route is what the
  * admin's sandboxed iframe loads and is NOT cookie-authed: the host iframe
  * was first shipped as `sandbox="allow-scripts"` only — an opaque origin
@@ -45,7 +46,7 @@ import { Readable } from 'node:stream'
 import { imageMimeFromExt } from '@turmind/halo-core'
 import { extensionsRoot, getInstalledExtension, getSnapshot, isExtensionId } from '../extensions/registry.js'
 import { ExtensionInstallError, installExtensionZip, uninstallExtension } from '../extensions/install.js'
-import { setExtensionDisabled } from '../extensions/state.js'
+import { confirmExtensionBackend, setExtensionDisabled } from '../extensions/state.js'
 import { rescanAndBroadcast } from '../extensions/watcher.js'
 import { mintScopedToken, verifyScopedToken } from '../middleware/auth.js'
 import { checkExtensionNow } from '../updates/extension-check.js'
@@ -169,6 +170,29 @@ export function createExtensionRoutes() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.log(`[Extensions] switch ${id} failed: ${msg}`)
+      return c.json({ error: msg }, 500)
+    }
+  })
+
+  // The admin's go-ahead for a manifest `backend` — extensions/backend.ts
+  // starts none without it, whichever way the extension was installed. Kept
+  // across updates of the same id, dropped on uninstall / fresh install.
+  // Idempotent like PATCH: a repeat writes nothing and pushes nothing.
+  app.post('/extensions/:id/confirm-backend', (c) => {
+    const id = c.req.param('id')
+    if (!isExtensionId(id)) return c.json({ error: 'Invalid extension id' }, 400)
+    const ext = getInstalledExtension(id)
+    if (!ext) return c.json({ error: 'Extension not installed' }, 404)
+    if (!ext.backend) return c.json({ error: 'Extension has no backend' }, 400)
+    try {
+      if (confirmExtensionBackend(id)) {
+        console.log(`[Extensions] ${id}@${ext.version} backend confirmed`)
+        rescanAndBroadcast()
+      }
+      return c.json({ ok: true, id })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log(`[Extensions] confirm ${id} backend failed: ${msg}`)
       return c.json({ error: msg }, 500)
     }
   })

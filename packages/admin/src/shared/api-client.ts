@@ -791,6 +791,11 @@ export const api = {
     setEnabled(id: string, enabled: boolean) {
       return request<{ ok: boolean; id: string; enabled: boolean }>(`/extensions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) })
     },
+    /** Confirm the extension's manifest `backend` — the server starts none
+     *  without it (repeating it is a no-op). */
+    confirmBackend(id: string) {
+      return request<{ ok: boolean; id: string }>(`/extensions/${encodeURIComponent(id)}/confirm-backend`, { method: 'POST' })
+    },
     /** Install the newer version its update.json names (the server re-reads
      *  and re-judges it; 409 when nothing newer or one is already running). */
     update(id: string) {

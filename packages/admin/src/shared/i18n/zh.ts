@@ -481,6 +481,10 @@ export const zh: Record<string, string> = {
   'settings.extensions.invalid': '更新信息无效：{error}',
   'settings.extensions.refused': '更新来源被拒绝：{error}',
   'settings.extensions.unreachable': '来源不可达：{error}',
+  'settings.extensions.backend': '服务端程序',
+  'settings.extensions.backendPending': '后端待确认：确认前不会运行',
+  'settings.extensions.confirmBackend': '确认',
+  'settings.extensions.confirmBackendPrompt': '{name} 带有后端程序，会在服务器上以 Halo 的权限运行。确认之前不会启动，请只确认来源可信的扩展。允许它运行吗？',
 
   // security (change password + logout)
   'security.changePassword.title': '修改密码',

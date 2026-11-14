@@ -81,6 +81,10 @@ export interface ExtensionChatbar {
  *  (HTTP + WS forwarded), stopped again when idle. */
 export interface ExtensionBackend {
   entry: string
+  /** Set by the scanner, not the manifest: an admin confirmed it in Settings →
+   *  Extensions (server extensions/state.ts). The server starts no backend
+   *  without it; absent = not confirmed. */
+  confirmed?: boolean
 }
 
 export interface ExtensionInfo {

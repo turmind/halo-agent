@@ -1,10 +1,13 @@
 /**
- * Per-extension user state that must outlive an update — today only the
- * on / off switch. One file, `~/.halo/global/extensions/.state.json`:
+ * Per-extension user state that must outlive an update — the on / off switch
+ * and the admin's confirmation of a manifest `backend` (extensions/backend.ts
+ * starts none without it). One file, `~/.halo/global/extensions/.state.json`:
  *
- *   { "glb": { "disabled": true } }
+ *   { "glb": { "disabled": true }, "voice-input": { "backendConfirmed": true } }
  *
- * An id without an entry is on. The file sits beside the extension dirs, not
+ * An id without an entry is on and unconfirmed. A fresh install and an
+ * uninstall drop the entry (forgetExtension); an update keeps it, so an
+ * update of the same id is not asked about again. The file sits beside the extension dirs, not
  * inside one: an update swaps the whole `<id>/` directory (install.ts), so a
  * flag in there would be lost; and as a direct child of the root its atomic
  * rename trips extensions/watcher.ts like any install does. Dot-named, so the
@@ -26,9 +29,11 @@ import { globalExtensionsDir } from '../paths.js'
 
 export interface ExtensionState {
   disabled?: boolean
+  backendConfirmed?: boolean
 }
 
 type States = Record<string, ExtensionState>
+type Flag = 'disabled' | 'backendConfirmed'
 
 export class ExtensionStateError extends Error {}
 
@@ -38,15 +43,15 @@ export function extensionStatePath(): string {
 }
 
 /** null states = the file exists but isn't a JSON object. */
-let cache: { key: string; states: States | null; disabled: Set<string> } | null = null
+let cache: { key: string; states: States | null; disabled: Set<string>; confirmed: Set<string> } | null = null
 
-function load(): { states: States | null; disabled: Set<string> } {
+function load(): { states: States | null; disabled: Set<string>; confirmed: Set<string> } {
   const file = extensionStatePath()
   let st: fs.Stats
   try {
     st = fs.statSync(file)
   } catch {
-    return { states: {}, disabled: new Set() } // no file = nothing switched off
+    return { states: {}, disabled: new Set(), confirmed: new Set() } // no file = nothing switched off / confirmed
   }
   const key = `${file}:${st.ino}:${st.mtimeMs}:${st.size}`
   if (cache?.key === key) return cache
@@ -56,8 +61,8 @@ function load(): { states: States | null; disabled: Set<string> } {
     if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) states = raw as States
   } catch { /* unreadable / not JSON → null below */ }
   if (!states) console.warn(`[Extensions] ${file} is not a JSON object — treating every extension as on; fix or delete the file`)
-  const disabled = new Set(Object.entries(states ?? {}).filter(([, s]) => isEntry(s) && s.disabled === true).map(([id]) => id))
-  cache = { key, states, disabled }
+  const idsWith = (flag: Flag) => new Set(Object.entries(states ?? {}).filter(([, s]) => isEntry(s) && s[flag] === true).map(([id]) => id))
+  cache = { key, states, disabled: idsWith('disabled'), confirmed: idsWith('backendConfirmed') }
   return cache
 }
 
@@ -69,6 +74,12 @@ function isEntry(v: unknown): v is ExtensionState {
  *  leaves its entry; a reinstall of that id then starts off). */
 export function disabledExtensionIds(): ReadonlySet<string> {
   return load().disabled
+}
+
+/** Ids whose manifest `backend` the admin confirmed (extensions/backend.ts
+ *  refuses to start any other). An unreadable file confirms nothing. */
+export function confirmedBackendIds(): ReadonlySet<string> {
+  return load().confirmed
 }
 
 /** Read-modify-write via writeFileAtomic (tmp + rename, Windows fallback).
@@ -84,18 +95,29 @@ function update(fn: (states: States) => boolean): boolean {
   return true
 }
 
-/** Switch `id` off (`true`) or on. Returns false when it already was —
+/** Set or clear one flag of `id`. Returns false when it already was —
  *  idempotent, no write. An entry left empty is dropped, other fields kept. */
-export function setExtensionDisabled(id: string, disabled: boolean): boolean {
+function setFlag(id: string, flag: Flag, on: boolean): boolean {
   return update((states) => {
     const cur = isEntry(states[id]) ? states[id] : {}
-    if ((cur.disabled === true) === disabled) return false
-    const { disabled: _, ...rest } = cur
-    if (disabled) states[id] = { ...rest, disabled: true }
+    if ((cur[flag] === true) === on) return false
+    const { [flag]: _, ...rest } = cur
+    if (on) states[id] = { ...rest, [flag]: true }
     else if (Object.keys(rest).length > 0) states[id] = rest
     else delete states[id]
     return true
   })
+}
+
+/** Switch `id` off (`true`) or on. Returns false when it already was. */
+export function setExtensionDisabled(id: string, disabled: boolean): boolean {
+  return setFlag(id, 'disabled', disabled)
+}
+
+/** Record the admin's confirmation of `id`'s backend. Returns false when it
+ *  already was. Cleared only with the whole entry (forgetExtension). */
+export function confirmExtensionBackend(id: string): boolean {
+  return setFlag(id, 'backendConfirmed', true)
 }
 
 /** Drop everything stored for `id` (uninstall), so a reinstall starts fresh.

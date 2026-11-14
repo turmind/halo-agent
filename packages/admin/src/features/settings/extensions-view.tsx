@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Upload, Trash2, AlertTriangle, ToggleLeft, ToggleRight, RefreshCw, ArrowUpCircle } from 'lucide-react'
-import type { ExtensionUpdateEntry, ExtensionsUpdateStatus } from '@turmind/halo-core/protocol'
+import { Upload, Trash2, AlertTriangle, ToggleLeft, ToggleRight, RefreshCw, ArrowUpCircle, ShieldCheck } from 'lucide-react'
+import type { ExtensionInfo, ExtensionUpdateEntry, ExtensionsUpdateStatus } from '@turmind/halo-core/protocol'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
 import { useI18n } from '@/shared/i18n'
@@ -25,6 +25,12 @@ import { newerStatus } from './update-status'
  * server cooldown). Results arrive as `updates:changed` — no polling. Each
  * row shows its verdict; 更新 asks the server to install what update.json
  * names (it re-reads and re-judges, the client sends nothing but the id).
+ *
+ * Backends: an extension whose manifest declares `backend` runs nothing on
+ * the server until an admin confirms it here (server extensions/backend.ts
+ * enforces it for every install path). An upload or update that lands an
+ * unconfirmed one asks right away; cancelling leaves it installed with the
+ * row's Confirm button. An update of an already-confirmed id doesn't ask.
  */
 export function ExtensionsView() {
   const { t } = useI18n()
@@ -49,11 +55,30 @@ export function ExtensionsView() {
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }
 
+  /** After an upload / update: ask when it landed an unconfirmed backend. */
+  async function offerConfirm(info: ExtensionInfo) {
+    if (!info.backend || info.backend.confirmed) return
+    if (await confirmAction(t('settings.extensions.confirmBackendPrompt', { name: info.name }))) await api.extensions.confirmBackend(info.id)
+  }
+
+  async function handleConfirmBackend(ext: ExtensionInfo) {
+    if (!(await confirmAction(t('settings.extensions.confirmBackendPrompt', { name: ext.name })))) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.extensions.confirmBackend(ext.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function handleUpdate(id: string) {
     setBusy(true)
     setError(null)
     try {
-      await api.extensions.update(id)
+      await offerConfirm(await api.extensions.update(id))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -65,7 +90,7 @@ export function ExtensionsView() {
     setBusy(true)
     setError(null)
     try {
-      await api.extensions.install(file)
+      await offerConfirm(await api.extensions.install(file))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -195,6 +220,11 @@ export function ExtensionsView() {
                       {t('settings.extensions.chatbar')}
                     </span>
                   )}
+                  {ext.backend && (
+                    <span className="shrink-0 rounded border border-[var(--border)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
+                      {t('settings.extensions.backend')}
+                    </span>
+                  )}
                   {!runsHere(ext) && (
                     <span className="shrink-0 rounded bg-[var(--secondary)] px-1.5 text-[10px] text-[var(--muted-foreground)]">
                       {t('settings.extensions.unsupportedHere')}
@@ -216,8 +246,21 @@ export function ExtensionsView() {
                 ) : ext.description && (
                   <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">{ext.description}</p>
                 )}
+                {ext.backend && !ext.backend.confirmed && (
+                  <p className="mt-0.5 truncate text-[10px] text-amber-500">{t('settings.extensions.backendPending')}</p>
+                )}
                 {update && <UpdateLine entry={update} />}
               </div>
+              {ext.backend && !ext.backend.confirmed && (
+                <button
+                  onClick={() => handleConfirmBackend(ext)}
+                  disabled={busy}
+                  className="flex shrink-0 cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-[10px] text-amber-500 hover:bg-amber-500/10 disabled:opacity-50"
+                >
+                  <ShieldCheck className="h-3 w-3" />
+                  {t('settings.extensions.confirmBackend')}
+                </button>
+              )}
               {update?.state === 'available' && (
                 <button
                   onClick={() => handleUpdate(ext.id)}

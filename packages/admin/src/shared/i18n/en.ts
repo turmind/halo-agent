@@ -481,6 +481,10 @@ export const en: Record<string, string> = {
   'settings.extensions.invalid': 'Invalid update info: {error}',
   'settings.extensions.refused': 'Update source refused: {error}',
   'settings.extensions.unreachable': 'Update source unreachable: {error}',
+  'settings.extensions.backend': 'server process',
+  'settings.extensions.backendPending': 'Backend not confirmed — it won\'t run until you confirm',
+  'settings.extensions.confirmBackend': 'Confirm',
+  'settings.extensions.confirmBackendPrompt': '{name} ships a backend program that runs on this server with Halo\'s permissions. It stays stopped until you confirm. Only confirm extensions from a source you trust. Allow it to run?',
 
   // security (change password + logout)
   'security.changePassword.title': 'Change Password',

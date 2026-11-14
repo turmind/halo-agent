@@ -254,9 +254,9 @@ safe_unzip() {
   unzip -q "$1" -d "$2"
 }
 
-# Drop extension $1's on / off state from `$ROOT/.state.json` (the server's
-# extensions/state.ts owns that file; this is its forgetExtension), so the id
-# starts on. Missing or unreadable file = nothing to drop. A failed write only
+# Drop extension $1's state (on / off, backend confirmation) from
+# `$ROOT/.state.json` (the server's extensions/state.ts owns that file; this
+# is its forgetExtension), so the id starts on and unconfirmed. Missing or unreadable file = nothing to drop. A failed write only
 # warns: the directory change it follows already happened.
 state_forget() {
   node -e '
@@ -341,7 +341,16 @@ case $cmd in
     if [[ -d $ROOT/$id ]]; then old="$ROOT/.old-$id-$RANDOM$RANDOM"; mv "$ROOT/$id" "$old"; else state_forget "$id"; fi
     mv "$stage" "$ROOT/$id" || { [[ -n $old ]] && mv "$old" "$ROOT/$id"; rm -rf "$stage"; exit 1; }
     if [[ -n $old ]]; then rm -rf "$old"; fi
-    echo "installed $id $ver" ;;
+    echo "installed $id $ver"
+    # A manifest `backend` runs nothing until an admin confirms it (server
+    # extensions/backend.ts); an update of a confirmed id stays confirmed.
+    node -e '
+      const fs = require("fs"), [dir, state, id] = process.argv.slice(1)
+      let m = {}, s = {}
+      try { m = JSON.parse(fs.readFileSync(dir + "/halo-extension.json", "utf8")) } catch {}
+      try { s = JSON.parse(fs.readFileSync(state, "utf8")) } catch {}
+      if (m.backend && !(s && s[id] && s[id].backendConfirmed === true)) console.log("backend not confirmed: " + id + " runs a program on this server and stays stopped until an admin confirms it in Settings → Extensions")
+    ' "$ROOT/$id" "$ROOT/.state.json" "$id" ;;
   list)
     shopt -s nullglob
     n=0

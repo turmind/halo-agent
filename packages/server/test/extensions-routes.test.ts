@@ -271,6 +271,43 @@ describe('PATCH /api/extensions/:id  (on / off)', () => {
   })
 })
 
+describe('POST /api/extensions/:id/confirm-backend', () => {
+  const confirm = (id: string, withCookie = true) => app.request(`/api/extensions/${id}/confirm-backend`, { method: 'POST', headers: withCookie ? { Cookie: cookie } : {} })
+  const zip = (version = '1.0.0', backend = true) => zipOf({
+    'halo-extension.json': JSON.stringify({ ...manifest, version, ...(backend ? { backend: { entry: 'backend/main.cjs' } } : {}) }),
+    'index.html': '<html>glb</html>',
+    'backend/main.cjs': '',
+  })
+  type Listed = { extensions: { id: string; backend?: { confirmed?: boolean } }[] }
+  const backendOf = async () => ((await (await get('/api/extensions')).json()) as Listed).extensions[0]?.backend
+
+  it('an install lands unconfirmed; confirming pushes once, is idempotent, survives an update and is dropped by uninstall', async () => {
+    const installed = await upload(app, await zip(), cookie)
+    expect(((await installed.json()) as { backend: unknown }).backend).toEqual({ entry: 'backend/main.cjs', confirmed: false })
+    sock.sent.length = 0
+    expect((await confirm('glb')).status).toBe(200)
+    expect(await backendOf()).toEqual({ entry: 'backend/main.cjs', confirmed: true })
+    expect((await confirm('glb')).status).toBe(200)
+    await new Promise((r) => setTimeout(r, 450))
+    expect(changed()).toHaveLength(1)
+
+    const updated = await upload(app, await zip('1.1.0'), cookie)
+    expect(((await updated.json()) as { backend: unknown }).backend).toEqual({ entry: 'backend/main.cjs', confirmed: true })
+
+    expect((await app.request('/api/extensions/glb', { method: 'DELETE', headers: { Cookie: cookie } })).status).toBe(200)
+    await upload(app, await zip(), cookie)
+    expect(await backendOf()).toEqual({ entry: 'backend/main.cjs', confirmed: false })
+  })
+
+  it('400 on a bad id or a backend-less extension, 404 when not installed, 401 without the cookie', async () => {
+    await upload(app, await zip('1.0.0', false), cookie)
+    expect((await confirm('Bad.Id')).status).toBe(400)
+    expect((await confirm('glb')).status).toBe(400)
+    expect((await confirm('nope')).status).toBe(404)
+    expect((await confirm('glb', false)).status).toBe(401)
+  })
+})
+
 describe('GET /api/extensions/:id/:version/:token/*  (static assets)', () => {
   const wasm = Buffer.from([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0])
   beforeEach(async () => {
