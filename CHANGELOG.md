@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-14
+
 - Extensions can ship their own server-side program (manifest `backend`): Halo starts it on first use behind `/api/ext/<id>/*`, stops it after 5 idle minutes, write-isolates it with bwrap on Linux, and runs it only after an admin confirms it in Settings → Extensions (asked right after a zip install or Update; the row shows "Backend not confirmed" until then). update.json may list one zip per platform (`packages`).
 - On-device speech-to-text moved out of the server into the voice-input and htrans extensions (1.1.0, each with its own backend): recognition, speaker labels and errors are unchanged, the ~400 MB it uses is freed 5 minutes after the last use instead of staying until restart, and the install no longer carries sherpa-onnx: `npm install -g @turmind/halo` takes about 87 MB of disk instead of 120 MB (48 packages instead of 50, npm cache about 31 MB instead of 43 MB) on our x86 test machine; the download stays about 10.5 MB, and idle memory is unchanged (sherpa-onnx was only loaded on first use). `/api/stt/stream` and the `stt-local` capability are gone.
 - **Upgrade note:** voice-input / htrans 1.0.x stop working on 2.3.0 (their manifest declares the removed `stt-local`). They show up in Settings → Extensions as an error with only Remove, so there is no Update button: remove them there and install 1.1.0 again (from a zip, or `/extension install voice-input` / `/extension install htrans`), then press Confirm. The models are downloaded again into each extension's own data dir (~271 MB each); the old `~/.halo/global/stt-models/` can be deleted.
@@ -1293,7 +1295,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.2.7...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/turmind/halo-agent/compare/v2.2.7...v2.3.0
 [2.2.7]: https://github.com/turmind/halo-agent/compare/v2.2.6...v2.2.7
 [2.2.6]: https://github.com/turmind/halo-agent/compare/v2.2.5...v2.2.6
 [2.2.5]: https://github.com/turmind/halo-agent/compare/v2.2.4...v2.2.5
