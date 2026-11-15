@@ -571,7 +571,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         {isActive && (
           <div className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[var(--primary)]" />
         )}
-        <span className="flex w-12 shrink-0 justify-center">{tab.icon}</span>
+        <span data-ui="icon" className="flex w-12 shrink-0 justify-center">{tab.icon}</span>
         <ActivityBarLabel expanded={drawer.open} title={tab.label} desc={tab.desc} />
       </button>
     )

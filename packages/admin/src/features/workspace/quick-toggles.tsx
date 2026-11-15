@@ -178,7 +178,7 @@ export function QuickToggles({ items: allItems, expanded = false, onOpenChange }
           open && 'bg-[var(--secondary)]',
         )}
       >
-        <span className="flex w-12 shrink-0 flex-col items-center justify-center gap-1">
+        <span data-ui="icon" className="flex w-12 shrink-0 flex-col items-center justify-center gap-1">
           <Settings className="h-5 w-5" />
           <span className="flex h-[3px] w-[30px] gap-[2px]">
             {items.map((i) => (

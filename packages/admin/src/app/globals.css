@@ -320,10 +320,15 @@ body {
 [data-ui-style] [data-ui~="main"].fixed { padding: var(--ui-gap); }
 
 /* navigation sits on the backdrop: activity bar, sidebars, their headers */
-[data-ui-style] [data-ui="activity"] { background: var(--ui-backdrop); border-right-color: transparent; }
+[data-ui-style] [data-ui="activity"] { background: var(--ui-backdrop); border-right-width: 0; }
 [data-ui-style] [data-ui="activity"] > div > button[data-active],
 [data-ui-style] [data-ui="activity"] > button[data-active] { background: var(--ui-nav-active); }
-[data-ui-style] [data-ui="activity"] button { margin-inline: 4px; width: calc(100% - 8px); border-radius: var(--radius-lg); height: 2.75rem; }
+/* activity buttons are inset 4px a side (40px wide from x=4), so the w-12 icon
+   slot shrinks to 40px too — icon, highlight block and the 48px bar share one
+   centre line, collapsed or with the drawer open. Scoped to buttons owning an
+   icon slot so the quick-toggles popover's rows aren't caught. */
+[data-ui-style] [data-ui="activity"] button:has(> [data-ui="icon"]) { margin-inline: 4px; width: calc(100% - 8px); border-radius: var(--radius-lg); height: 2.75rem; }
+[data-ui-style] [data-ui="activity"] [data-ui="icon"] { width: calc(3rem - 8px); }
 [data-ui-style] [data-ui="activity"] button[data-active] > div:first-child { display: none; }
 /* each sidebar's root (nav > div) carries its bg + (cron / evolution) a
    border-r; its direct children are header / filter bars with a border-b */
