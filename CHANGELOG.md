@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-11-15
+
+- Admin: on a phone (narrower than 768px, or a phone in landscape) the admin switches to its own single-column layout — chat first, bottom nav (Chat / Files / Sessions / More), list → detail → back, settings in two levels; it remembers the last page and rotating doesn't reload a running canvas viewer.
+- Admin (phone): dialogs and context menus open as bottom sheets, long-press = right-click (iOS too), inputs don't zoom the page on iOS, the input bar stays above the keyboard; pages never scroll sideways — forms go single column, long ids / paths / URLs wrap, code blocks and tables scroll inside themselves.
+- Canvas extensions can go fullscreen on a phone: the viewer fills the screen with a × at the top right; new `init.immersive` + two-way `immersive` frame in the extension protocol (arcade 2.3.0 / megadrive 2.2.0 use it); an unknown frame type is now ignored with a warning instead of throwing.
+- Admin (modern / soft): no edge-to-edge rules between chat turns or under attachments.
+- Build: bundling refuses a lockfile resolution without `integrity`.
+
 ## [2.3.2] - 2026-11-15
 
 - Admin: a switchable interface style, `general.ui_style` (Settings → General): `modern` (the new default, a compact panelled IDE look), `soft` or `classic`. It changes shape, spacing and type size only, independent of the colour theme, and `classic` is pixel-identical to before; set it back to `classic` to keep the old look.
@@ -1308,7 +1316,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.3...HEAD
+[2.3.3]: https://github.com/turmind/halo-agent/compare/v2.3.2...v2.3.3
 [2.3.2]: https://github.com/turmind/halo-agent/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/turmind/halo-agent/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/turmind/halo-agent/compare/v2.2.7...v2.3.0
