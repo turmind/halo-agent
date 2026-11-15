@@ -53,7 +53,7 @@ A file outside the workspace opened from a chat path link ([chat.md](chat.md#mes
 Non-text files go through `FilePreview`, which looks up a **plugin** in the preview registry by file extension. Built-in plugins:
 - **PDF** — browser-native iframe
 - **DOCX / DOC** — `mammoth` → HTML (parsed in a Web Worker so the UI stays responsive)
-- **XLSX / XLS** — `xlsx` (SheetJS) → table, parsed whole in a Web Worker (zip can't stream); rendered with client-side paging (500 rows/page over the in-memory parse — no truncation, just paged)
+- **XLSX / XLS** — `xlsx` (SheetJS 0.20.3, installed from the SheetJS CDN tarball — npm's `xlsx` stops at 0.18.5 and gets no fixes) → table, parsed whole in a Web Worker (zip can't stream); rendered with client-side paging (500 rows/page over the in-memory parse — no truncation, just paged)
 - **CSV / TSV** — server-paginated table: each page (100 rows) is parsed and fetched from the server on demand, so large files open instantly. Delimiter is sniffed from the header line (comma/semicolon/tab; `.tsv` forces tab); total row count is a lazy lower bound ("N+") until the last page is reached
 - **Parquet** — server-paginated table (schema + 100-row pages), same pager as CSV/SQLite
 - **SQLite / DB (.db / .sqlite / .sqlite3)** — server-paginated table with a table-selector sidebar (name + row count per table); opened read-only, one page (100 rows) per request

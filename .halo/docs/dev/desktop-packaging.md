@@ -248,7 +248,7 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   isn't worth a dead app. (`stage-runtime.mjs` has the strip step removed.)
 
 - **better-sqlite3's ABI must match the BUNDLED node (`NODE_VERSION` in
-  `stage-runtime.mjs`, currently v22.11.0 / ABI 127), not
+  `stage-runtime.mjs`, currently v22.23.5 / ABI 127), not
   the build host's node.** `pnpm deploy` / `npm install` hard-link whatever
   `.node` the build host's *active* node produced. If a homebrew/nvm node 23
   (ABI 131) shadows the pinned 22 on the build machine, the staged

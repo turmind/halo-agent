@@ -30,7 +30,7 @@ previews/
 │   └── print.ts              Pop-up print helper
 ├── workers/                  Parse workers (one per heavy format)
 │   ├── worker-client.ts      Generic WorkerClient<T> class — id-routed postMessage
-│   ├── xlsx.worker.ts
+│   ├── xlsx.worker.ts        SheetJS `xlsx` 0.20.3, from the SheetJS CDN tarball (npm stops at 0.18.5)
 │   └── docx.worker.ts
 └── plugins/
     ├── index.ts              Registers all built-in plugins
