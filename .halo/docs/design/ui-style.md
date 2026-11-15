@@ -20,10 +20,12 @@ Call sites hardcode Tailwind classes (~600 of them), so the layer can't swap cla
 
 | Hook | Where | What the style does |
 |---|---|---|
-| `shell` / `activity` / `main` / `nav` / `gap` / `card` / `dock` | `workspace-layout.tsx` | backdrop, floating cards, gaps instead of 1px dividers, sidebars on the backdrop (their root's bg / `border-r` and header bars' `border-b` cleared) |
-| `editor` / `bar` | `editor-panel.tsx` | editor card on the Monaco surface (`--ui-editor-surface`: `#1e1e1e` on dark = vs-dark, `--background` on the others — `--background` is re-pointed inside the card so previews / tree follow) |
+| `shell` / `activity` / `icon` / `main` / `nav` / `gap` / `card` / `dock` | `workspace-layout.tsx`, `quick-toggles.tsx` (`icon`) | backdrop, floating cards, gaps instead of 1px dividers, sidebars on the backdrop (their root's bg / `border-r` and header bars' `border-b` cleared). Activity buttons are inset 4px a side, so the `icon` slot shrinks to `3rem - 8px` and the bar drops its border width: icon, highlight and the 48px bar share one centre line, collapsed or with the drawer open |
+| `main` / `nav` / `gap` / `card` | `agent-management-main.tsx`, `settings-main.tsx` | pages that lay out their own list + content (Agents, Settings): the outer layout card turns transparent and the page's own nav / card take the backdrop / card look |
+| `editor` / `bar` / `tree` | `editor-panel.tsx` (also embedded as the Skills / agent edit view), `source-control-main.tsx` (diff), `skills-main.tsx` (extension skill view) | editor card on the Monaco surface (`--ui-editor-surface`: `#1e1e1e` on dark = vs-dark, `--background` on the others — `--background` is re-pointed inside the card so previews follow); the file tree is a tinted side column with no divider |
+| `strip` | header / footer strips of main areas (agent editor toolbar, Settings section bar, session viewer, cron / evolution detail, cron form, channel account list, diff header) | no hard rule, card surface |
 | `bottom` / `bar` / `chat` / `side` / `tabs` / `floating` | bottom panel, chat / terminal panels, tab bar, resizable sidebar, floating panel | one card for bar + chat + session column, pill tabs |
-| `row` + `data-active` | sidebar list rows (file tree, sessions, change tree, channels, skills, cron, evolution) | inset rounded rows, selection = `--ui-nav-active` block |
+| `row` + `data-active` | sidebar list rows (file tree, sessions, change tree, commit files, channels, skills, agents, cron, evolution, Settings nav, extension skill files) | inset rounded rows, selection = `--ui-nav-active` block |
 | `menu` | context menus, dropdowns, pickers | rounded, inset items |
 | `dialog` | modal panels (folder / file pickers, credentials, account form, cron log, models sync, download, the chat bar's camera / capture pickers) | card radius |
 | `pin` | sticky chat cards in `message-list.tsx` (sub-session report, compact summary, pinned user message) | inset rounded card |
