@@ -39,6 +39,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execSync, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { lockfileIntegrityGate } from './lockfile-integrity.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -112,6 +113,14 @@ function lockstepVersionGate() {
   console.log(`[build-bundle] lockstep gate: all 5 packages at ${versions[0][1]}`)
 }
 lockstepVersionGate()
+
+// Every `resolution:` in pnpm-lock.yaml must carry `integrity`. The pre-release
+// `pnpm update -r --prod --no-save` (deploy.md) drops it from tarball-URL deps
+// — admin's `xlsx` from the SheetJS CDN lost it at both 2.3.1 and 2.3.2 — and
+// `pnpm install --frozen-lockfile` then fails with
+// ERR_PNPM_MISSING_TARBALL_INTEGRITY. Runs on every build, like the
+// TEMPLATE_VERSION gate: a line scan of the lockfile is a few ms.
+lockfileIntegrityGate(path.join(REPO_ROOT, 'pnpm-lock.yaml'))
 
 // ── 1. esbuild bundle ──────────────────────────────────────────────────────
 //
