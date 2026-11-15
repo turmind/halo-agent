@@ -3,7 +3,7 @@ import type { ExtensionCapability, ExtensionClientFrame, ExtensionTheme } from '
 import {
   initialHostState, isClientFrame, onClientFrame, onLoaded, onPutResult, onConflictChoice,
   onFileChanged, onLangChange, onSaveRequest, onThemeChange, registerExtensionHost, getExtensionHost,
-  onFsResult, isBundlePath, isSystemPath, createKeyedQueue, grantedCapabilities,
+  onFsResult, isBundlePath, isSystemPath, createKeyedQueue, grantedCapabilities, onImmersiveChange,
   type HostState, type HostEffect, type HostContext,
 } from '../src/features/editor/previews/extension-host-logic'
 import { readThemeVars, schemeFromRgb } from '../src/shared/theme/palette'
@@ -566,5 +566,50 @@ describe('init.jupyter', () => {
   it('is omitted for a bundle and when there is no workspace', () => {
     expect(initOf(initialHostState(['media'], true), wsCtx)).not.toHaveProperty('jupyter')
     expect(initOf(initialHostState(['save']), ctx)).not.toHaveProperty('jupyter')
+  })
+})
+
+/**
+ * Contract (immersive): a host that offers it sends `init.immersive: true`;
+ * the extension asks with `{type:'immersive', on}` and hears every flip back
+ * as the same frame. A host that didn't offer it, a non-boolean `on`, or a
+ * frame before `ready` is a warn, never an effect. Unknown frame types are
+ * ignored (a newer extension on an older host) instead of throwing.
+ */
+describe('immersive', () => {
+  const imCtx: HostContext = { ...ctx, immersive: true }
+  const initOf = (c: HostContext) => {
+    const init = onClientFrame(initialHostState([]), frame({ type: 'ready', protocol: 1 }), c).effects[0]
+    return init.type === 'post' && init.frame.type === 'init' && init.frame.view === 'file' ? init.frame : null
+  }
+
+  it('init carries immersive:true only when the host offers it', () => {
+    expect(initOf(imCtx)?.immersive).toBe(true)
+    expect(initOf(ctx)).not.toHaveProperty('immersive')
+  })
+
+  it('an immersive frame becomes one immersive effect on an offering host', () => {
+    expect(onClientFrame(ready([]), frame({ type: 'immersive', on: true }), imCtx).effects).toEqual([{ type: 'immersive', on: true }])
+    expect(onClientFrame(ready([]), frame({ type: 'immersive', on: false }), imCtx).effects).toEqual([{ type: 'immersive', on: false }])
+  })
+
+  it('is ignored before ready, on a host that did not offer it, or with a non-boolean on', () => {
+    expect(types(onClientFrame(initialHostState([]), frame({ type: 'immersive', on: true }), imCtx).effects)).toEqual(['warn'])
+    expect(types(onClientFrame(ready([]), frame({ type: 'immersive', on: true }), ctx).effects)).toEqual(['warn'])
+    const bad = { haloExt: 1, type: 'immersive', on: 'yes' } as unknown as ExtensionClientFrame
+    expect(types(onClientFrame(ready([]), bad, imCtx).effects)).toEqual(['warn'])
+  })
+
+  it('a flip posts one immersive frame after ready, nothing before or when not offered', () => {
+    expect(onImmersiveChange(ready([]), true, imCtx).effects).toEqual([{ type: 'post', frame: { haloExt: 1, type: 'immersive', on: true } }])
+    expect(onImmersiveChange(initialHostState([]), true, imCtx).effects).toEqual([])
+    expect(onImmersiveChange(ready([]), false, ctx).effects).toEqual([])
+  })
+
+  it('an unknown frame type is a warn with the state unchanged', () => {
+    const s = ready([])
+    const step = onClientFrame(s, { haloExt: 1, type: 'from-the-future' } as unknown as ExtensionClientFrame, imCtx)
+    expect(step.state).toBe(s)
+    expect(types(step.effects)).toEqual(['warn'])
   })
 })

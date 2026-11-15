@@ -45,6 +45,9 @@ export interface HostContext {
   lang: ExtensionLang
   /** Workspace of the open file; undefined outside a workspace panel. */
   projectId?: string
+  /** This host answers `immersive` frames (a save-less viewer in the main
+   *  canvas) → `init.immersive: true`. */
+  immersive?: boolean
 }
 
 export type HostEffect =
@@ -73,6 +76,10 @@ export type HostEffect =
   /** Write a validated `export` next to the open file (`name` is a plain
    *  file name); answer with exactly one `exported` / `export-error`. */
   | { type: 'export'; name: string; buffer: ArrayBuffer }
+  /** The extension asked for (`on`) or out of the host's immersive mode
+   *  (`init.immersive` hosts only); the component checks it may, and answers
+   *  with an `immersive` frame only when the state actually flips. */
+  | { type: 'immersive'; on: boolean }
 
 export interface Step {
   state: HostState
@@ -255,6 +262,7 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
           theme: ctx.theme, themeVars: ctx.themeVars, bundle: state.bundle, platform: ctx.platform, lang: ctx.lang,
           export: canSave(state) && !state.bundle,
           ...(ctx.projectId && !state.bundle ? { jupyter: { projectId: ctx.projectId } } : {}),
+          ...(ctx.immersive ? { immersive: true as const } : {}),
         },
       }
       // A bundle never gets `load` — it reads what it needs through `fs`.
@@ -289,9 +297,18 @@ export function onClientFrame(state: HostState, frame: ExtensionClientFrame, ctx
       return onExportFrame(state, frame, ctx)
     case 'pick':
       return onPickFrame(state, frame)
+    case 'immersive':
+      if (!state.ready) return { state, effects: [{ type: 'warn', message: 'immersive before ready ignored' }] }
+      if (!ctx.immersive || typeof frame.on !== 'boolean') return { state, effects: [{ type: 'warn', message: 'immersive frame ignored (host did not offer it, or `on` is not a boolean)' }] }
+      return { state, effects: [{ type: 'immersive', on: frame.on }] }
     case 'insert-text':
     case 'busy':
       return { state, effects: [{ type: 'warn', message: `${frame.type} frame ignored outside a chat-bar panel` }] }
+    default:
+      // A type this host doesn't know (a newer extension): ignore it. Without
+      // this the switch fell through to `undefined` and the caller's
+      // `step.state` read threw.
+      return { state, effects: [{ type: 'warn', message: `unknown frame type ${JSON.stringify((frame as { type: unknown }).type)} ignored` }] }
   }
 }
 
@@ -377,6 +394,13 @@ export function onThemeChange(state: HostState, theme: ExtensionTheme, themeVars
 export function onLangChange(state: HostState, lang: ExtensionLang): Step {
   if (!state.ready) return { state, effects: [] }
   return { state, effects: [{ type: 'post', frame: { haloExt: 1, type: 'lang', lang } }] }
+}
+
+/** The iframe's immersive state flipped (any cause) — tell an extension that
+ *  was offered the frame; an `off` before `ready` is the initial state. */
+export function onImmersiveChange(state: HostState, on: boolean, ctx: HostContext): Step {
+  if (!state.ready || !ctx.immersive) return { state, effects: [] }
+  return { state, effects: [{ type: 'post', frame: { haloExt: 1, type: 'immersive', on } }] }
 }
 
 // ── Host registry ────────────────────────────────────────────────────

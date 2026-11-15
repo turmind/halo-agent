@@ -16,7 +16,16 @@ import { useEditorStore } from '@/shared/stores/editor-store'
  *  otherwise) — provided per pane by EditorPanel, matched by the host. */
 export const ImmersivePane = createContext<string | null>(null)
 
+/** Same panes, maximized or not: null = a nested editor (Skills / Agents —
+ *  never immersive); else the main canvas, carrying the pane's active tab when
+ *  the pane is focused ('' when it isn't). Lets a host offer the extension's
+ *  `immersive` frame (init.immersive) and honour it only for the focused tab. */
+export const ImmersiveScope = createContext<string | null>(null)
+
 let owner: object | null = null
+// Hosts that could go immersive right now (focused main-canvas tab, save-less
+// viewer) — the phone layout shows its full-screen button only then.
+const offers = new Set<object>()
 const listeners = new Set<() => void>()
 function emit(): void {
   for (const l of listeners) l()
@@ -32,6 +41,24 @@ export function isImmersive(): boolean {
 
 export function useImmersive(): boolean {
   return useSyncExternalStore(subscribe, isImmersive, () => false)
+}
+
+function isOffered(): boolean {
+  return offers.size > 0
+}
+
+export function useImmersiveOffered(): boolean {
+  return useSyncExternalStore(subscribe, isOffered, () => false)
+}
+
+/** A host can go immersive (until the returned release). */
+export function offerImmersive(): () => void {
+  const token = {}
+  offers.add(token)
+  emit()
+  return () => {
+    if (offers.delete(token)) emit()
+  }
 }
 
 /** The host went immersive; the returned release is idempotent per claim. */

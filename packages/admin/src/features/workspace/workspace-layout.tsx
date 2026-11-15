@@ -37,9 +37,11 @@ import { CronSidebar } from '@/features/cron/cron-sidebar'
 import { SourceControlSidebar } from '@/features/source-control/source-control-sidebar'
 import { SourceControlMain } from '@/features/source-control/source-control-main'
 import { QuickToggles, useQuickToggleItems } from '@/features/workspace/quick-toggles'
+import { MobileShell, type MobileEntry } from '@/features/workspace/mobile-shell'
+import { isMobileViewport, useIsMobile } from '@/shared/use-is-mobile'
 import { ActivityBarLabel } from '@/features/workspace/activity-bar-label'
 import { useHoverIntent } from '@/shared/use-hover-intent'
-import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch } from 'lucide-react'
+import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, SquareTerminal } from 'lucide-react'
 import { useI18n } from '@/shared/i18n'
 import { envBadgeTitlePrefix } from '@/shared/env-badge'
 import type { LinkState } from '@/shared/use-websocket'
@@ -148,6 +150,8 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     exitImmersive({ refocus: false })
     openTab(sessionId)
     useEditorStore.getState().setBottomTab('chat')
+    // Phone layout: the chat is a tab of its own (mobile-shell) — go there.
+    if (isMobileViewport()) window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer' } }))
     // After the un-maximized layout has painted the docked / floating chat.
     requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('halo:focus-chat-input')))
   }
@@ -548,7 +552,11 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   const [dockedBottomSlot, setDockedBottomSlot] = useState<HTMLDivElement | null>(null)
   const [overlayBottomSlot, setOverlayBottomSlot] = useState<HTMLDivElement | null>(null)
   const [floatingBottomSlot, setFloatingBottomSlot] = useState<HTMLDivElement | null>(null)
-  const activeBottomSlot = bottomFloating ? floatingBottomSlot : bottomMaximized ? overlayBottomSlot : dockedBottomSlot
+  // Phone layout (< 768px): MobileShell replaces everything below; the one
+  // BottomPanel moves into its slot like into any other.
+  const isMobile = useIsMobile()
+  const [mobileBottomSlot, setMobileBottomSlot] = useState<HTMLDivElement | null>(null)
+  const activeBottomSlot = isMobile ? mobileBottomSlot : bottomFloating ? floatingBottomSlot : bottomMaximized ? overlayBottomSlot : dockedBottomSlot
   useLayoutEffect(() => {
     if (bottomHost && activeBottomSlot && bottomHost.parentElement !== activeBottomSlot) {
       activeBottomSlot.appendChild(bottomHost)
@@ -574,6 +582,45 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         <span data-ui="icon" className="flex w-12 shrink-0 justify-center">{tab.icon}</span>
         <ActivityBarLabel expanded={drawer.open} title={tab.label} desc={tab.desc} />
       </button>
+    )
+  }
+
+  const bottomPortal = bottomHost && createPortal(
+    <BottomPanel floating={bottomFloating} dragHandleRef={bottomDragHandleRef} />,
+    bottomHost,
+  )
+
+  if (isMobile) {
+    const mobileEntries: MobileEntry[] = [
+      ...topTabs.filter((tab) => tab.id !== 'explorer' && tab.id !== 'sessions'),
+      ...extensionTabs,
+      { id: 'terminal', icon: <SquareTerminal className="h-5 w-5" />, label: t('nav.terminal'), desc: t('nav.desc.terminal') },
+      ...bottomTabs,
+    ].map(({ id, icon, label, desc }) => ({ id, icon, label, desc }))
+    return (
+      <>
+        <MobileShell
+          entries={mobileEntries}
+          extensions={extensionPages}
+          quickToggles={quickToggleItems}
+          projectId={projectId}
+          bottomSlotRef={setMobileBottomSlot}
+          explorer={<ExplorerSidebar projectId={projectId} pathInput={pathInput} onPathInputChange={setPathInput} onOpenFolder={handleOpenFolder} onOpenPath={openFolderPath} activeProject={activeProject} />}
+        />
+        {immersive && replyToast && (
+          <div role="status" className="fixed inset-x-3 top-[max(12px,env(safe-area-inset-top))] z-[80] flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--foreground)] shadow-lg">
+            <span className="min-w-0 flex-1 truncate">
+              {replyToast.sessionIds.length > 1
+                ? t('editor.immersive.repliedMany', { count: replyToast.sessionIds.length })
+                : t('editor.immersive.replied', { title: replyToast.title ?? t('chat.tabs.untitled') })}
+            </span>
+            <button type="button" onClick={() => backToChat(replyToast.sessionIds[0])} className="shrink-0 py-1 font-medium text-[var(--primary)]">
+              {t('editor.immersive.backToChat')}
+            </button>
+          </div>
+        )}
+        {bottomPortal}
+      </>
     )
   }
 
@@ -722,10 +769,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           host that's relocated between the docked / maximized / floating slots
           — never unmounted on mode switch, so the terminal's xterm instances
           (and PTY sessions) survive. */}
-      {bottomHost && createPortal(
-        <BottomPanel floating={bottomFloating} dragHandleRef={bottomDragHandleRef} />,
-        bottomHost,
-      )}
+      {bottomPortal}
     </div>
   )
 }

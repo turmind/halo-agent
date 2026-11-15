@@ -16,7 +16,7 @@ import { TabBar } from './tab-bar'
 import { FilePreview, canPreview, isBundleName, isHeavyPreview, loadExtensions, useRegistryVersion } from './previews/FilePreview'
 import { getExtensionHost } from './previews/extension-host-logic'
 import { isContentChange, tabRefresh, versionedUrl } from './file-refresh'
-import { ImmersivePane, armImmersiveFullscreen, useImmersive } from './immersive'
+import { ImmersivePane, ImmersiveScope, armImmersiveFullscreen, useImmersive } from './immersive'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
@@ -1350,6 +1350,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                     })()}
                     {/* The pane's active tab while maximized: the extension host showing it
                         decides whether that is immersive (immersive.ts). */}
+                    <ImmersiveScope.Provider value={showMaximize ? (isFocused ? paneActive ?? '' : '') : null}>
                     <ImmersivePane.Provider value={maximized && showMaximize && isFocused ? paneActive : null}>
                     <div className="flex-1 overflow-hidden">
                       {/* The pinned face stays mounted while its pane shows another tab —
@@ -1482,6 +1483,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                       })()}
                     </div>
                     </ImmersivePane.Provider>
+                    </ImmersiveScope.Provider>
                   </div>
                 </Panel>
               )

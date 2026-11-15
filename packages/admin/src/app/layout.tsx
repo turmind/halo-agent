@@ -1,4 +1,4 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import { AppI18nProvider } from '@/shared/i18n'
 import { ThemeProvider } from '@/shared/theme'
@@ -12,6 +12,15 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: 'Halo - Multi-Agent Workspace',
   description: 'Multi-agent collaboration workspace for complex project delivery',
+}
+
+// viewport-fit=cover: on a notched phone the page reaches the screen edges and
+// env(safe-area-inset-*) is non-zero, so the phone layout (globals.css) pads
+// itself clear of the notch / home bar. No effect on a desktop window.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 }
 
 // Anti-flash: stamp data-theme from the localStorage cache before first paint.

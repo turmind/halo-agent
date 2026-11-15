@@ -13,10 +13,11 @@ import { PreviewShell, ToolbarButton } from './ui/preview-shell'
 import { extensionEntryUrl, getExtensionToken } from './extension-token'
 import { BackendPendingNotice, backendPending } from './extension-backend-gate'
 import { currentPlatform, isImmersiveViewer } from './registry'
-import { ImmersivePane, claimImmersive, createExitPill, exitImmersive, takeFullscreenArm, takeRefocus } from '../immersive'
+import { ImmersivePane, ImmersiveScope, claimImmersive, createExitPill, exitImmersive, offerImmersive, takeFullscreenArm, takeRefocus } from '../immersive'
+import { useIsMobile } from '@/shared/use-is-mobile'
 import {
   createKeyedQueue, exportError, grantedCapabilities, initialHostState, isClientFrame, onClientFrame, onConflictChoice, onFileChanged, onFsResult, onLoaded,
-  isSystemPath, onLangChange, onPutResult, onSaveRequest, onThemeChange, pickResult, registerExtensionHost,
+  isSystemPath, onImmersiveChange, onLangChange, onPutResult, onSaveRequest, onThemeChange, pickResult, registerExtensionHost,
   type FsOutcome, type HostContext, type HostEffect, type HostState, type Step,
 } from './extension-host-logic'
 import type { PreviewProps } from './types'
@@ -177,6 +178,25 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
   // Version this iframe was mounted with; a differing `info.version` → §9.3.
   const mountedVersionRef = useRef(info.version)
 
+  // Main canvas (not a nested Skills / Agents editor) + nothing to save →
+  // this host offers the `immersive` frame (init.immersive); `focusedHere` =
+  // it is the focused pane's active tab, the only time one is honoured.
+  const scope = useContext(ImmersiveScope)
+  const canImmerse = scope !== null && isImmersiveViewer(info)
+  const focusedHere = canImmerse && scope === path
+  // Immersive maximize (immersive.ts): this viewer is the maximized panel's
+  // focused tab and has nothing to save (bundles included) → its banners +
+  // iframe region become a viewport overlay. Pure CSS: the iframe is never
+  // reparented or remounted.
+  const immersive = useContext(ImmersivePane) === path && isImmersiveViewer(info)
+  // Read by the protocol callbacks (stable `run` / applyEffect via refs).
+  const immersiveRef = useRef(immersive)
+  const focusedHereRef = useRef(focusedHere)
+  useEffect(() => {
+    immersiveRef.current = immersive
+    focusedHereRef.current = focusedHere
+  })
+
   // Latest-props refs (same pattern as code-editor.tsx's onSaveRef) so the
   // stable `run` never executes a stale closure. Frames only arrive after
   // effects have run, so the one-render lag is never observed.
@@ -187,6 +207,7 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
     platform: currentPlatform(),
     lang,
     projectId,
+    immersive: canImmerse,
   }
   const ctxRef = useRef(ctx)
   const applyEffectRef = useRef<(eff: HostEffect) => void>(() => {})
@@ -313,6 +334,15 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
         setPicking({ id: eff.id, accept: eff.accept, start, attempt: attemptRef.current })
         return
       }
+      case 'immersive': {
+        // The host's own immersive mode = maximize with this tab focused —
+        // the same state the maximize button / Exit / Esc drive, so every exit
+        // path stays one. Never armed: a frame is no user activation, so no
+        // real fullscreen, CSS fill only.
+        if (eff.on && focusedHereRef.current && !immersiveRef.current) useEditorStore.getState().setMaximized(true)
+        if (!eff.on && immersiveRef.current) exitImmersive()
+        return
+      }
     }
   }
 
@@ -397,6 +427,8 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
       }
       if (e.data.type === 'save') clearSaveTimer()
       run(onClientFrame(stateRef.current, e.data, ctxRef.current))
+      // A (re)loaded extension starts out of immersive: tell it when the tab already is.
+      if (e.data.type === 'ready' && immersiveRef.current) run(onImmersiveChange(stateRef.current, true, ctxRef.current))
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
@@ -463,11 +495,18 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
     remount()
   }
 
-  // Immersive maximize (immersive.ts): this viewer is the maximized panel's
-  // focused tab and has nothing to save (bundles included) → its banners +
-  // iframe region become a viewport overlay. Pure CSS: the iframe is never
-  // reparented or remounted.
-  const immersive = useContext(ImmersivePane) === path && isImmersiveViewer(info)
+  // Every flip, whoever caused it, reaches an extension offered the frame.
+  useEffect(() => {
+    run(onImmersiveChange(stateRef.current, immersive, ctxRef.current))
+  }, [immersive, run])
+  // The phone canvas shows its full-screen button only while some host could go immersive.
+  useEffect(() => (focusedHere ? offerImmersive() : undefined), [focusedHere])
+  // Phone layout, or no Fullscreen API (iPhone Safari): immersive is a CSS
+  // fill of the whole screen with an always-visible ×. The iframe gets every
+  // pixel (viewport-fit=cover, edge to edge); the viewer keeps its controls
+  // clear of the notch / home bar with env(safe-area-inset-*) itself.
+  const isMobile = useIsMobile()
+  const pseudo = isMobile || (typeof document !== 'undefined' && typeof document.documentElement.requestFullscreen !== 'function')
   const [pillOpen, setPillOpen] = useState(false)
   const [pill] = useState(() => createExitPill(setPillOpen))
   const [coarse] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches)
@@ -581,7 +620,7 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
 
   return (
     <PreviewShell name={name} downloadUrl={downloadUrl} onOpenAsText={onOpenAsText} extraToolbar={toolbar} hideHeader={immersive}>
-      <div data-immersive={immersive || undefined} className={cn('flex h-full flex-col', immersive && 'fixed inset-0 z-[70] bg-[var(--background)]')}>
+      <div data-immersive={immersive || undefined} className={cn('flex h-full flex-col', immersive && 'fixed inset-0 z-[70] bg-[var(--background)]', immersive && pseudo && 'h-dvh bg-black')}>
         {gone && <Banner>{t(`editor.extension.${gone}`)}</Banner>}
         {upgradeNotice && (
           <Banner onClose={() => setUpgradeNotice(null)}>
@@ -629,6 +668,8 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
                 sandbox="allow-scripts allow-same-origin"
                 allow={info.capabilities.includes('media') ? MEDIA_ALLOW : ''}
                 referrerPolicy="no-referrer"
+                // iPad Safari's webkitRequestFullscreen inside the frame needs it.
+                allowFullScreen
                 title={info.name}
                 className="h-full w-full border-0 bg-[var(--background)]"
                 onLoad={() => setFrameLoads((n) => n + 1)}
@@ -644,7 +685,20 @@ export function ExtensionHostPreview({ info, gone, name, path, projectId, viewUr
         {picking && projectId && (
           <FilePicker workspace={toSlash(projectId)} accept={picking.accept} start={picking.start} onDone={(f) => { void onPicked(f) }} />
         )}
-        {immersive && (
+        {immersive && pseudo && (
+          // Phone / no Fullscreen API: a small translucent × always on screen,
+          // top-right clear of the notch (viewers put their title top-left and
+          // a rotate hint top-centre, and hide their own × while immersive).
+          <button
+            type="button"
+            onClick={() => exitImmersive()}
+            aria-label={t('editor.immersive.exit')}
+            className="absolute right-[max(8px,env(safe-area-inset-right))] top-[max(8px,env(safe-area-inset-top))] z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-lg leading-none text-white/90 backdrop-blur active:bg-black/70"
+          >
+            ×
+          </button>
+        )}
+        {immersive && !pseudo && (
           // Mouse: top-center, only while the pointer is near the top (no
           // hot-zone over the iframe — the band is watched by listeners).
           // Touch: always on screen, so it sits top-left — where viewers put

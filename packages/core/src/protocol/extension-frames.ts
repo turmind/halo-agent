@@ -81,6 +81,10 @@ export type ExtensionHostFrame =
        *  sent to every non-bundle extension. Older hosts omit it — hide
        *  kernel UI then. Whether Jupyter is usable: `GET /api/jupyter/status`. */
       jupyter?: { projectId: string }
+      /** true = this host answers `immersive` frames: a viewer without `save`
+       *  (bundles too) in the main canvas. Older hosts and every other host
+       *  omit it — keep using your own `requestFullscreen` then. */
+      immersive?: true
     })
   // activity-bar page / chat-bar panel: also followed by `theme` / `lang`;
   // the host answers only `ready` / `error` from it (no load / save / fs /
@@ -136,6 +140,13 @@ export type ExtensionHostFrame =
   // `busy: true`. It stays mounted (and `insert-text` still lands) until the
   // extension reports `busy: false`, or 35 s pass; closing again unmounts it.
   | (ExtensionFrameBase & { type: 'close-request' })
+  // init.immersive hosts only: this iframe entered (`on: true`) or left the
+  // host's immersive mode (viewer fills the viewport, every bit of host
+  // chrome hidden) — sent on every change, whoever caused it (the extension's
+  // own `immersive` frame, the host's maximize / Exit button, Esc, a tab
+  // switch), and once right after `init` when the tab is already immersive.
+  // Initially off. CSS only: the host never calls `requestFullscreen` for it.
+  | (ExtensionFrameBase & { type: 'immersive'; on: boolean })
 
 // ── Extension → Host ─────────────────────────────────────────────────
 
@@ -165,6 +176,13 @@ export type ExtensionClientFrame =
   // (recording, a result still pending) — a user close then gets
   // `close-request` instead of an unmount. Initially false; elsewhere ignored
   | (ExtensionFrameBase & { type: 'busy'; busy: boolean })
+  // init.immersive hosts only: ask for the host's immersive mode — the
+  // fallback for a page without the Fullscreen API on elements (iPhone
+  // Safari). Honoured only while this tab is the focused pane's active tab,
+  // otherwise ignored; the host answers with its own `immersive` frame when
+  // the state actually changes. Not a user gesture: CSS fill, no real
+  // fullscreen.
+  | (ExtensionFrameBase & { type: 'immersive'; on: boolean })
 
 export type ExtensionHostFrameType = ExtensionHostFrame['type']
 export type ExtensionClientFrameType = ExtensionClientFrame['type']
