@@ -47,8 +47,8 @@ export function SourceControlMain() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-[var(--background)]">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3">
+    <div data-ui="editor" className="flex h-full flex-col bg-[var(--background)]">
+      <div data-ui="strip" className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3">
         <GitCompare className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
         <span className="truncate text-xs text-[var(--foreground)]">{selected.path}</span>
         <span className="text-[10px] text-[var(--muted-foreground)]">

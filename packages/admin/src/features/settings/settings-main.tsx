@@ -178,9 +178,9 @@ export function SettingsMain() {
   )
 
   return (
-    <div className="flex h-full bg-[var(--background)]">
+    <div data-ui="main" className="flex h-full bg-[var(--background)]">
       {/* Left: nav */}
-      <div className="flex w-[220px] shrink-0 flex-col border-r border-[var(--border)]">
+      <div data-ui="nav" className="flex w-[220px] shrink-0 flex-col border-r border-[var(--border)]">
         <div className="flex h-10 items-center gap-2 border-b border-[var(--border)] px-3">
           <Settings2 className="h-4 w-4 text-[var(--muted-foreground)]" />
           <span className="text-sm font-medium text-[var(--foreground)]">{t('nav.settings')}</span>
@@ -234,8 +234,8 @@ export function SettingsMain() {
       </div>
 
       {/* Right: section content */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] px-4">
+      <div data-ui="card" className="flex min-w-0 flex-1 flex-col">
+        <div data-ui="strip" className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] px-4">
           <span className="text-[11px] text-[var(--muted-foreground)]">
             {activeNs === '__security'
               ? <>~/.halo/secrets/config.yaml &rarr; <code className="text-[var(--foreground)]">server.password</code></>
@@ -367,7 +367,7 @@ function useCollapsedNavGroups(): [Set<string>, (id: string) => void] {
 
 function NavItem({ active, onClick, title, children }: { active: boolean; onClick: () => void; title?: string; children: React.ReactNode }) {
   return (
-    <button
+    <button data-ui="row" data-active={active || undefined}
       onClick={onClick}
       title={title}
       className={cn(

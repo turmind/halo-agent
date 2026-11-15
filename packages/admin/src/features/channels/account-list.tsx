@@ -63,7 +63,7 @@ export function ChannelAccountsPage<A extends { accountId: string }>(props: {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+      <div data-ui="strip" className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
         <div>
           <h2 className="text-sm font-medium text-[var(--foreground)]">{t(`${ns}.title`)}</h2>
           <p className="text-[11px] text-[var(--muted-foreground)]">{t(`${ns}.desc`)}</p>

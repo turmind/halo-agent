@@ -93,7 +93,7 @@ function CommitFileRow({
   const { Icon, color } = getFileIcon(file.path)
   const { name, dir } = splitPath(file.path)
   return (
-    <button
+    <button data-ui="row" data-active={active || undefined}
       onClick={onSelect}
       className={cn(
         'flex w-full items-center gap-1.5 py-0.5 pr-2 text-left text-xs',

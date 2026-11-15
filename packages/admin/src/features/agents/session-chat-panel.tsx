@@ -334,7 +334,7 @@ export function SessionChatPanel({ visible }: { visible: boolean }) {
 
   return (
     <div data-ui="card" className="flex h-full flex-col bg-[var(--background)]">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 min-w-0">
+      <div data-ui="strip" className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 min-w-0">
         {selectedSessionId ? (
           <>
             <ListFilter className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />

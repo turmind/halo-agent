@@ -188,7 +188,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-[var(--border)] px-4 py-3">
+      <div data-ui="strip" className="border-b border-[var(--border)] px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex flex-1 items-center gap-2 text-sm font-medium text-[var(--foreground)]">
             <Clock className="h-4 w-4" />
@@ -694,7 +694,7 @@ function CronForm({ initial, onClose, onSaved }: {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+      <div data-ui="strip" className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
         <div className="text-sm font-medium">{initial ? t('cron.form.edit') : t('cron.form.create')}</div>
         <button onClick={onClose} className="rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)]">{t('cron.form.cancel')}</button>
       </div>
@@ -943,7 +943,7 @@ function CronForm({ initial, onClose, onSaved }: {
         {formError && <div className="rounded border border-red-500/50 bg-red-950/40 p-2 text-red-300">{formError}</div>}
       </div>
 
-      <div className="flex justify-end gap-2 border-t border-[var(--border)] px-4 py-3">
+      <div data-ui="strip" className="flex justify-end gap-2 border-t border-[var(--border)] px-4 py-3">
         <button onClick={onClose} className="rounded bg-[var(--accent)] px-3 py-1 text-xs">{t('cron.form.cancel')}</button>
         <button onClick={() => { void onSubmit() }} disabled={submitting} className="rounded bg-[var(--primary)] px-3 py-1 text-xs text-[var(--primary-foreground)] disabled:opacity-50">
           {submitting ? t('cron.form.saving') : initial ? t('cron.form.save') : t('cron.form.create.btn')}

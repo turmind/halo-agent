@@ -275,7 +275,7 @@ export function AgentManagementMain() {
         {expanded && items.map((agent) => {
           const key = agentKey(agent)
           return (
-            <div
+            <div data-ui="row" data-active={selectedKey === key || undefined}
               key={key}
               className={cn(
                 'group flex w-full items-center gap-2 pl-7 pr-2 py-1.5 cursor-pointer transition-colors',
@@ -328,8 +328,8 @@ export function AgentManagementMain() {
   }
 
   return (
-    <PanelGroup direction="horizontal" autoSaveId="halo-agent-mgmt" className="h-full">
-      <Panel defaultSize={22} minSize={12} maxSize={40}>
+    <PanelGroup data-ui="main" direction="horizontal" autoSaveId="halo-agent-mgmt" className="h-full">
+      <Panel data-ui="nav" defaultSize={22} minSize={12} maxSize={40}>
         <div className="h-full flex flex-col bg-[var(--background)]">
           <div className="flex h-10 items-center gap-2 border-b border-[var(--border)] px-3">
             <Bot className="h-4 w-4 text-[var(--muted-foreground)]" />
@@ -351,8 +351,8 @@ export function AgentManagementMain() {
           </div>
         </div>
       </Panel>
-      <PanelResizeHandle className="w-px bg-[var(--border)] hover:w-1 hover:bg-[var(--primary)] transition-colors" />
-      <Panel defaultSize={78} minSize={40}>
+      <PanelResizeHandle data-ui="gap" className="w-px bg-[var(--border)] hover:w-1 hover:bg-[var(--primary)] transition-colors" />
+      <Panel data-ui="card" defaultSize={78} minSize={40}>
         {selected ? (
           <AgentEditorWithChat
             key={agentKey(selected)}
@@ -522,7 +522,7 @@ export function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved 
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex h-10 items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-3">
+      <div data-ui="strip" className="flex h-10 items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-3">
         <div className="flex items-center gap-2">
           {view === 'edit' && (
             <button

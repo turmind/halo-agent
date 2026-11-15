@@ -334,7 +334,14 @@ body {
    border-r; its direct children are header / filter bars with a border-b */
 [data-ui-style] [data-ui="nav"],
 [data-ui-style] [data-ui="nav"] > div { background: transparent; border-right-color: transparent; }
-[data-ui-style] [data-ui="nav"] > div > div { border-bottom-color: transparent; }
+[data-ui-style] [data-ui="nav"] > div,
+[data-ui-style] [data-ui="nav"] > div > div,
+[data-ui-style] [data-ui="nav"] > div > div > div { border-block-color: transparent; }
+/* pages that lay out their own nav + content (Agents, Settings) instead of
+   using workspace-layout's sidebar slot: same backdrop + card, a gap between */
+[data-ui-style] [data-ui~="card"] [data-ui="main"] { background: var(--ui-backdrop); }
+[data-ui-style] [data-ui~="card"]:has(> [data-ui="main"]) { border-radius: 0; box-shadow: none; background: transparent; }
+[data-ui-style] [data-ui="main"] > [data-ui="nav"] + [data-ui~="card"] { margin-left: var(--ui-gap); }
 
 /* gaps instead of 1px divider lines (the grab area stays as wide) */
 [data-ui-style] [data-ui="gap"] { background: transparent; }
@@ -359,6 +366,15 @@ body {
 [data-ui-style] [data-ui="editor"] { --background: var(--ui-editor-surface); }
 [data-ui-style] [data-ui="dock"] > [data-ui="editor"],
 [data-ui-style] [data-ui="editor"] { background: var(--ui-editor-surface); }
+/* a file tree inside a card (Skills / agent edit view, extension skill view):
+   a tinted side column like the chat session list, no divider line */
+[data-ui-style] [data-ui="tree"] {
+  background: color-mix(in oklab, var(--ui-backdrop) 45%, var(--ui-editor-surface));
+  border-right-color: transparent;
+}
+[data-ui-style] [data-ui="tree"] [data-ui="row"] { margin-inline: 6px; width: calc(100% - 12px); border-radius: var(--radius-md); }
+[data-ui-style] [data-ui="tree"] [data-ui="row"][data-active] { background: var(--ui-nav-active); color: var(--foreground); }
+[data-ui-style] [data-ui="editor"] [data-panel-group-direction="horizontal"] > [data-resize-handle] { background: transparent; }
 
 /* bottom panel: its bar + the chat / session-list split become one card whose
    session list is a tinted side column, no hard rules between them */
@@ -369,6 +385,10 @@ body {
   border-left-color: transparent;
   background: color-mix(in oklab, var(--ui-backdrop) 45%, var(--ui-surface));
 }
+
+/* card header / footer strips (page toolbars, detail headers, form footers):
+   no hard rule, the card's own surface */
+[data-ui-style] [data-ui="strip"] { border-block-color: transparent; background: transparent; }
 
 /* title / tool bars: no rule under them, icon buttons lose their chrome */
 [data-ui-style] [data-ui="bar"],

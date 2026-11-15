@@ -1282,7 +1282,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         {showTreeSidebar && (
           <>
           <Panel defaultSize={20} minSize={10} maxSize={40}>
-            <div className="flex h-full flex-col bg-[var(--card)]">
+            <div data-ui="tree" className="flex h-full flex-col bg-[var(--card)]">
               {uploadBar}
               <div ref={treeContainerRef} tabIndex={0} className="flex-1 overflow-y-auto outline-none">
               {!projectId ? (

@@ -60,7 +60,7 @@ function ExtensionSkillView({ skill }: { skill: Skill }) {
 
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">
-      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-2">
+      <div data-ui="strip" className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-2">
         <Puzzle className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
         <span className="text-sm font-medium text-[var(--foreground)] truncate">{skill.name}</span>
         <span className="shrink-0 rounded bg-[var(--secondary)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
@@ -72,9 +72,9 @@ function ExtensionSkillView({ skill }: { skill: Skill }) {
         {t('skill.extensionHint', { id: skill.id })}
       </p>
       <div className="flex min-h-0 flex-1">
-        <div className="w-48 shrink-0 overflow-y-auto border-r border-[var(--border)] py-1">
+        <div data-ui="tree" className="w-48 shrink-0 overflow-y-auto border-r border-[var(--border)] py-1">
           {files.map((f) => (
-            <button
+            <button data-ui="row" data-active={active === f || undefined}
               key={f}
               onClick={() => setActive(f)}
               title={f}

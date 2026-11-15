@@ -219,7 +219,7 @@ function RunDetailPane({ id }: { id: string }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-[var(--border)] px-4 py-3">
+      <div data-ui="strip" className="border-b border-[var(--border)] px-4 py-3">
         <div className="flex items-center gap-2">
           <StatusBadge status={run.status} />
           <span className="text-sm text-[var(--muted-foreground)]">{run.triggerKind}</span>
