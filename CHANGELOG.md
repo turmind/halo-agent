@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-11-15
+
+- Security: the spreadsheet preview's `xlsx` library moves from 0.18.5 to 0.20.3 (GHSA-4r6h-8v6p-xvw6, GHSA-5pgg-2g8v-p4x9). SheetJS no longer publishes to npm, so the admin now installs it from the SheetJS CDN (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`); building the admin needs that URL reachable, the published package is unaffected.
+- Security: the desktop app's Electron moves to 44.11.3 (GHSA-jr5w-w6x2-84p9) and the Node it bundles to v22.23.5 (same ABI 127, so the native modules are unchanged).
+- Dependencies: the bundled AWS SDK clients move to 3.1169.0 and postcss to 8.5.33 (patch releases within range).
+- Release process: the pre-release `pnpm update` step now ends with a frozen-install check, because the refresh drops the integrity of the admin's CDN-installed `xlsx` and breaks `pnpm install --frozen-lockfile` until it is restored (`dev/deploy.md`).
+
 ## [2.3.0] - 2026-11-14
 
 - Extensions can ship their own server-side program (manifest `backend`): Halo starts it on first use behind `/api/ext/<id>/*`, stops it after 5 idle minutes, write-isolates it with bwrap on Linux, and runs it only after an admin confirms it in Settings → Extensions (asked right after a zip install or Update; the row shows "Backend not confirmed" until then). update.json may list one zip per platform (`packages`).
@@ -1295,7 +1302,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/turmind/halo-agent/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/turmind/halo-agent/compare/v2.2.7...v2.3.0
 [2.2.7]: https://github.com/turmind/halo-agent/compare/v2.2.6...v2.2.7
 [2.2.6]: https://github.com/turmind/halo-agent/compare/v2.2.5...v2.2.6
