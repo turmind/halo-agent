@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-11-15
+
+- Admin: a switchable interface style, `general.ui_style` (Settings → General): `modern` (the new default, a compact panelled IDE look), `soft` or `classic`. It changes shape, spacing and type size only, independent of the colour theme, and `classic` is pixel-identical to before; set it back to `classic` to keep the old look.
+- Admin: the editor tab bar scrolls with a horizontal trackpad swipe or Shift + wheel, not only with its arrow buttons.
+- Admin: with the activity bar collapsed, its icons and the active highlight are centred in the soft and modern styles.
+
 ## [2.3.1] - 2026-11-15
 
 - Security: the spreadsheet preview's `xlsx` library moves from 0.18.5 to 0.20.3 (GHSA-4r6h-8v6p-xvw6, GHSA-5pgg-2g8v-p4x9). SheetJS no longer publishes to npm, so the admin now installs it from the SheetJS CDN (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`); building the admin needs that URL reachable, the published package is unaffected.
@@ -1302,7 +1308,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.2...HEAD
+[2.3.2]: https://github.com/turmind/halo-agent/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/turmind/halo-agent/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/turmind/halo-agent/compare/v2.2.7...v2.3.0
 [2.2.7]: https://github.com/turmind/halo-agent/compare/v2.2.6...v2.2.7
