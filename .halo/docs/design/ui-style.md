@@ -29,6 +29,7 @@ Call sites hardcode Tailwind classes (~600 of them), so the layer can't swap cla
 | `menu` | context menus, dropdowns, pickers | rounded, inset items |
 | `dialog` | modal panels (folder / file pickers, credentials, account form, cron log, models sync, download, the chat bar's camera / capture pickers) | card radius |
 | `pin` | sticky chat cards in `message-list.tsx` (sub-session report, compact summary, pinned user message) | inset rounded card |
+| `exchange` / `attach` | `message-list.tsx`: one turn's root row (`ExchangeRow`) / the image or media attachment row under a user message | their full-width `border-b` goes transparent — a gap between turns instead of a line running past the inset `pin` cards |
 
 `data-active` is set only where the component already knows the row is selected (`isActive || undefined`); classic CSS never reads it.
 
