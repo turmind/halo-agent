@@ -41,7 +41,7 @@ const CLI_PUB = path.join(CLI_DIR, 'dist-dev')
 // Pin to the same node major the native modules (better-sqlite3, node-pty)
 // were prebuilt against — see packages/server/package.json deps and the
 // engines field in repo root.
-const NODE_VERSION = 'v22.11.0'
+const NODE_VERSION = 'v22.23.5'
 // Bare version for prebuild-install --target etc. — keep every effective
 // use of the version derived from NODE_VERSION so a bump can't miss one.
 const NODE_VERSION_BARE = NODE_VERSION.slice(1)
