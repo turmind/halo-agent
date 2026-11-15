@@ -280,7 +280,7 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
         </button>
       )}
 
-      <div ref={scrollRef} className="flex flex-1 overflow-x-hidden">
+      <div ref={scrollRef} className="flex flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((tab, i) => {
           const { Icon, color } = getFileIcon(tab.path)
           const isActive = tab.path === activeTab && groupIdx === activePane
