@@ -260,10 +260,10 @@ importers:
         version: 5.2.0
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1142.0
-        version: 3.1168.0
+        version: 3.1169.0
       '@aws-sdk/client-transcribe-streaming':
         specifier: ^3.1142.0
-        version: 3.1168.0
+        version: 3.1169.0
       '@aws-sdk/credential-provider-node':
         specifier: ^3.972.30
         version: 3.972.97
@@ -439,12 +439,12 @@ packages:
   '@aws-crypto/util@5.2.0':
     resolution: {integrity: sha512-4RkU9EsI6ZpBve5fseQlGNUWKMa1RLPQ1dnjnQoe07ldfIzcsGb5hC5W0Dm7u423KWzawlrpbjXBrXCEv9zazQ==}
 
-  '@aws-sdk/client-bedrock-runtime@3.1168.0':
-    resolution: {integrity: sha512-9fRm/vh6nehGcwZefi7yuQu2dlwIRMk7ZRMri8aqLtUEWleUzxqFIGE2QLV2GZlIuYYq1691D4IPmej++PEj/w==}
+  '@aws-sdk/client-bedrock-runtime@3.1169.0':
+    resolution: {integrity: sha512-KkMuq9IW+H8VHTEw/qV+ArI70w1WoqDuM/ZLX87MXB0yV31ihqY+2lwZ+zeD5spcZpmlLuUzXTPyMpWE2ZnbtA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-transcribe-streaming@3.1168.0':
-    resolution: {integrity: sha512-twj903aS0hWLfLQyXQpspGodrye/6HEmAsUC2aaAJm1nFjk74K3YlJX253v0MDA6SaJfWbOPqWkFW0eQTFMhfA==}
+  '@aws-sdk/client-transcribe-streaming@3.1169.0':
+    resolution: {integrity: sha512-6Z0lBdhZ+GX6uG0S9xibnID+QJWtc+a7wQCMCNkO3L5i22GdBfdEObabBqYdGnPvlkLusK/U1w/mU7Q3iwwGCQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.981.0':
@@ -511,8 +511,8 @@ packages:
     resolution: {integrity: sha512-ngJ8mxXqtQ9mnp7QV6TWKJCxkpjVfPWxKQSc2FYhCyCfOVFIGdFv7P+/RqVffFrJAorwBPpktnv32gNlcEgF4g==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/token-providers@3.1168.0':
-    resolution: {integrity: sha512-N0VSJh8H31AjBX1EWAnyRkXqmpEza8Qe+xj8OQqk2pKSqGefSnc8VJ75kmrRGnCm9xcj+H2Uu1yUo/tW4BW3JA==}
+  '@aws-sdk/token-providers@3.1169.0':
+    resolution: {integrity: sha512-ScQiQuJIAFevAHjCh/E159qaWeQtw8KUZ4PGUfHMeJU0VXaF4HE8PSgNXY/y4nmqrT8/gD3SoFhuFT5dy1cisA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/types@3.975.1':
@@ -4917,8 +4917,8 @@ packages:
     resolution: {integrity: sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==}
     engines: {node: ^10 || ^12 || >=14}
 
-  postcss@8.5.32:
-    resolution: {integrity: sha512-LJlKCCAUFKOuZxipUdYw1NzIITEsPcgyOG9LkvRJvuKj/bRzbuRY0ARXvL0pWGpsZvn8jku+LMep2eU0seHp8g==}
+  postcss@8.5.33:
+    resolution: {integrity: sha512-RVHEU9/Pp1Fnjr/MpAJsZoADukCKhfIi15OunEYiGktIkYLkPVvC1sioWolGDS7XByMTx9m/IGbro0Js13zhnQ==}
     engines: {node: ^10 || ^12 || >=14}
 
   pptx-preview@1.0.7:
@@ -5993,14 +5993,14 @@ snapshots:
       '@smithy/util-utf8': 2.3.0
       tslib: 2.9.1
 
-  '@aws-sdk/client-bedrock-runtime@3.1168.0':
+  '@aws-sdk/client-bedrock-runtime@3.1169.0':
     dependencies:
       '@aws-sdk/core': 3.981.0
       '@aws-sdk/credential-provider-node': 3.972.97
       '@aws-sdk/eventstream-handler-node': 3.972.42
       '@aws-sdk/middleware-eventstream': 3.972.38
       '@aws-sdk/middleware-websocket': 3.972.66
-      '@aws-sdk/token-providers': 3.1168.0
+      '@aws-sdk/token-providers': 3.1169.0
       '@aws-sdk/types': 3.975.1
       '@smithy/core': 3.40.0
       '@smithy/fetch-http-handler': 5.8.1
@@ -6008,7 +6008,7 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/client-transcribe-streaming@3.1168.0':
+  '@aws-sdk/client-transcribe-streaming@3.1169.0':
     dependencies:
       '@aws-sdk/core': 3.981.0
       '@aws-sdk/credential-provider-node': 3.972.97
@@ -6176,7 +6176,7 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/token-providers@3.1168.0':
+  '@aws-sdk/token-providers@3.1169.0':
     dependencies:
       '@aws-sdk/core': 3.981.0
       '@aws-sdk/nested-clients': 3.998.3
@@ -10915,7 +10915,7 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  postcss@8.5.32:
+  postcss@8.5.33:
     dependencies:
       nanoid: 3.3.20
       picocolors: 1.1.1
@@ -11735,7 +11735,7 @@ snapshots:
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
-      postcss: 8.5.32
+      postcss: 8.5.33
       rolldown: 1.0.3
       tinyglobby: 0.2.17
     optionalDependencies:
@@ -11750,7 +11750,7 @@ snapshots:
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
-      postcss: 8.5.32
+      postcss: 8.5.33
       rolldown: 1.0.3
       tinyglobby: 0.2.17
     optionalDependencies:
