@@ -132,7 +132,7 @@ export function CronSidebar() {
               const isActive = selectedId === j.id
               const status = j.lastRunStatus
               return (
-                <li
+                <li data-ui="row" data-active={isActive || undefined}
                   key={j.id}
                   className={cn(
                     'cursor-pointer px-3 py-2 text-xs hover:bg-[var(--accent)]',

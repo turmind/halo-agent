@@ -98,7 +98,7 @@ export function ChangeTree({ files, group, selectedPath, onSelect, onAction }: C
       const isCollapsed = collapsed.has(node.path)
       return (
         <div key={`d:${node.path}`}>
-          <button
+          <button data-ui="row"
             onClick={() => toggle(node.path)}
             className="flex w-full items-center gap-1 py-0.5 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             style={{ paddingLeft: `${pad}px` }}
@@ -116,7 +116,7 @@ export function ChangeTree({ files, group, selectedPath, onSelect, onAction }: C
     const ActionIcon = group === 'staged' ? Minus : Plus
     const { Icon, color } = getFileIcon(node.file.path)
     return (
-      <div
+      <div data-ui="row" data-active={isActive || undefined}
         key={`f:${node.file.path}`}
         onClick={() => onSelect(node.file)}
         className={cn(

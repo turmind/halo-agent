@@ -217,7 +217,7 @@ export function SkillsSidebar() {
         {expanded && items.map((skill) => {
           const key = skillKey(skill)
           return (
-            <div
+            <div data-ui="row" data-active={selectedKey === key || undefined}
               key={key}
               onClick={() => setSelectedKey(key)}
               className={cn(

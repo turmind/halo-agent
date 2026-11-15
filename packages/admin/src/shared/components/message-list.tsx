@@ -269,7 +269,7 @@ function SubAgentReport({ content, ...actionProps }: ExchangeActionProps & { con
   const shortId = parsed.sessionId.split('>').pop() ?? parsed.sessionId
   const { contentRef, clamped, expanded, toggle, contentStyle } = useCollapsible(4)
   return (
-    <div className="sticky top-0 z-10 px-3 py-2 border-b border-[var(--border)] border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
+    <div data-ui="pin" className="sticky top-0 z-10 px-3 py-2 border-b border-[var(--border)] border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
       <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
         <ExchangeActions copyText={parsed.body} {...actionProps} />
       </div>
@@ -321,7 +321,7 @@ function CompactSummary({ content, ...actionProps }: ExchangeActionProps & { con
   // invalid HTML) — sibling overlay also means their clicks never reach the
   // expand/collapse handler.
   return (
-    <div className="sticky top-0 z-10 border-l-2 border-l-purple-500/70 bg-purple-950/40 backdrop-blur-sm shadow-sm">
+    <div data-ui="pin" className="sticky top-0 z-10 border-l-2 border-l-purple-500/70 bg-purple-950/40 backdrop-blur-sm shadow-sm">
       <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
         <ExchangeActions copyText={parsed.body} {...actionProps} />
       </div>
@@ -660,7 +660,7 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
     <>
       {/* accent bg/fg: on dark these resolve to the old slate-800 bg and a
           near-identical slate fg; on other themes they follow the palette */}
-      <div className={cn('sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted || sendFailed ? 'border-l-red-500/60' : 'border-l-blue-500')}>
+      <div data-ui="pin" className={cn('sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted || sendFailed ? 'border-l-red-500/60' : 'border-l-blue-500')}>
         <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
           {deleted && <span className={cn('mr-1', DELETED_BADGE_CLS)}>deleted</span>}
           {/* Ack/resend gave up — the server never confirmed this message

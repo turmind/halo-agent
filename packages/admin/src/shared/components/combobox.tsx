@@ -93,7 +93,7 @@ export function Combobox({
       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] opacity-50">▾</span>
 
       {open && (
-        <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-20 max-h-72 overflow-hidden rounded border border-[var(--border)] bg-[var(--card)] shadow-lg">
+        <div data-ui="menu" className="absolute left-0 right-0 top-[calc(100%+2px)] z-20 max-h-72 overflow-hidden rounded border border-[var(--border)] bg-[var(--card)] shadow-lg">
           <div className="border-b border-[var(--border)] p-1">
             <input
               ref={searchRef}

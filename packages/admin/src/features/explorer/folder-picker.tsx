@@ -43,7 +43,7 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
+      <div data-ui="dialog"
         className="w-[560px] max-h-[70vh] flex flex-col rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >

@@ -133,7 +133,7 @@ export function SessionContextMenu({ x, y, returnFocus, onRename, onDelete, onCl
 
   const item = 'flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-[var(--secondary)]'
   return (
-    <div
+    <div data-ui="menu"
       ref={menuRef}
       role="menu"
       tabIndex={-1}

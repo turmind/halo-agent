@@ -17,9 +17,11 @@ export const metadata: Metadata = {
 // Anti-flash: stamp data-theme from the localStorage cache before first paint.
 // This is a static export (no SSR cookies), so a React effect would run after
 // hydration and light-theme users would see a dark flash on every load. Keep
-// in sync with THEMES / UI_STYLES in shared/theme/context.tsx; dark and
-// classic stay attribute-less since they're the defaults.
-const themeInitScript = `try{var d=document.documentElement.dataset,t=localStorage.getItem('halo_theme'),s=localStorage.getItem('halo_ui_style');if(t==='light'||t==='midnight'||t==='warm')d.theme=t;if(s==='soft'||s==='modern')d.uiStyle=s}catch(e){}`
+// in sync with THEMES / UI_STYLES in shared/theme/context.tsx; dark stays
+// attribute-less since it's the :root default. The UI style defaults to
+// modern (no / unknown cache → modern); only an explicit classic leaves
+// data-ui-style off, which is what classic renders as.
+const themeInitScript = `try{var d=document.documentElement.dataset,t=localStorage.getItem('halo_theme'),s=localStorage.getItem('halo_ui_style');if(t==='light'||t==='midnight'||t==='warm')d.theme=t;if(s!=='classic')d.uiStyle=s==='soft'?'soft':'modern'}catch(e){}`
 
 export default function RootLayout({
   children,

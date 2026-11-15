@@ -37,7 +37,7 @@ export function ChannelsSidebar() {
           const translated = t(c.label)
           const label = translated === c.label ? c.label : translated
           return (
-            <button
+            <button data-ui="row" data-active={active === c.id || undefined}
               key={c.id}
               onClick={() => setActive(c.id)}
               className={cn(

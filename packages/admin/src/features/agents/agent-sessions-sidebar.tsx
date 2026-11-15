@@ -169,7 +169,7 @@ function SessionTree({
 
         return (
           <div key={sub.id}>
-            <button
+            <button data-ui="row" data-active={isSubSelected || undefined}
               onClick={() => onSelect(sub)}
               title="Click to preview sub-agent session"
               className={cn(
@@ -680,7 +680,7 @@ export function AgentSessionsSidebar() {
             return (
               <div key={main.id}>
                 {/* Main session row */}
-                <button
+                <button data-ui="row" data-active={isMainSelected || undefined}
                   onClick={() => handleSelectSession(main)}
                   onDoubleClick={() => handleLoadSession(main)}
                   title="Click to preview, double-click to load into chat"

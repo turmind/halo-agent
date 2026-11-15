@@ -95,7 +95,7 @@ export function TerminalContextMenu({ x, y, term, onClose }: TerminalContextMenu
   ]
 
   return (
-    <div
+    <div data-ui="menu"
       ref={menuRef}
       tabIndex={-1}
       style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: 9999 }}

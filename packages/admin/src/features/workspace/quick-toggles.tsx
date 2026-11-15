@@ -191,7 +191,7 @@ export function QuickToggles({ items: allItems, expanded = false, onOpenChange }
 
       {open && (
         // z-[60]: above the floating bottom panel (fixed z-50, later in the DOM).
-        <div className="absolute bottom-0 left-full z-[60] ml-1 w-[260px] rounded-lg border border-[var(--border)] bg-[var(--background)] py-1 shadow-lg">
+        <div data-ui="menu" className="absolute bottom-0 left-full z-[60] ml-1 w-[260px] rounded-lg border border-[var(--border)] bg-[var(--background)] py-1 shadow-lg">
           <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
             {t('quick.panelTitle')}
           </div>

@@ -100,7 +100,7 @@ function TabContextMenu({ x, y, path, groupIdx, onClose, onCloseTab }: TabContex
   ]
 
   return (
-    <div
+    <div data-ui="menu"
       ref={menuRef}
       className="fixed z-50 min-w-[160px] rounded-md border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg"
       style={{ left: x, top: y }}

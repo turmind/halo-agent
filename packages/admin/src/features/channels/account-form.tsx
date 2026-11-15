@@ -97,7 +97,7 @@ export function AccessLevelSelect(props: {
 export function ChannelDialog(props: { width: string; title?: string; onClose: () => void; children: ReactNode }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={props.onClose}>
-      <div
+      <div data-ui="dialog"
         className={cn(props.width, 'max-h-[90vh] overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] p-5 shadow-xl')}
         onClick={(e) => e.stopPropagation()}
       >

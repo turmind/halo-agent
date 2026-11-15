@@ -225,8 +225,10 @@ body {
 
 /*
  * UI style — <html data-ui-style="soft|modern"> picks a shape / spacing / type
- * layer that is orthogonal to data-theme (colors). classic = no attribute =
- * none of the rules below match, so the original look is untouched.
+ * layer that is orthogonal to data-theme (colors). modern is the default (an
+ * unset `general.ui_style` stamps it); classic = an explicit pick = no
+ * attribute = none of the rules below match, so the original look is
+ * untouched (pixel-diffed against 5503892).
  *
  * Two mechanisms, because the ~600 call sites hardcode their classes:
  *  1. Tailwind v4 theme variables. `rounded-md/lg/xl`, `text-xs/sm` compile to
@@ -248,7 +250,12 @@ body {
   --ui-surface: var(--background);
   --ui-nav-active: color-mix(in oklab, var(--foreground) 9%, transparent);
   --ui-hover: color-mix(in oklab, var(--foreground) 6%, transparent);
+  /* editor card = Monaco's editor.background (shared/theme/monaco.ts) so an
+     open code file isn't a lighter / darker hole in its card. light / midnight
+     / warm already equal --background; dark's stock vs-dark is #1e1e1e. */
+  --ui-editor-surface: var(--background);
 }
+[data-ui-style]:not([data-theme]) { --ui-editor-surface: #1e1e1e; }
 [data-ui-style="soft"] {
   --radius: 0.75rem;
   --radius-sm: 0.375rem;
@@ -293,7 +300,10 @@ body {
 [data-ui-style] .text-\[11px\] { font-size: var(--ui-text-11); }
 [data-ui-style] .text-\[10px\] { font-size: var(--ui-text-10); }
 [data-ui-style] .text-\[9px\] { font-size: var(--ui-text-9); }
-/* ALL-CAPS tracked section labels → sentence-case semibold */
+/* ALL-CAPS tracked section labels → sentence-case semibold. Deliberately a
+   class-string match: it's a pattern spread over ~20 label call sites, not a
+   container — hooking each would be churn. If a label's classes drift it just
+   keeps its classic ALL-CAPS look (harmless). */
 [data-ui-style] .uppercase[class*="tracking-wide"][class*="text-[var(--muted-foreground)]"],
 [data-ui-style] [data-ui="bar"] button.uppercase {
   text-transform: none;
@@ -315,11 +325,11 @@ body {
 [data-ui-style] [data-ui="activity"] > button[data-active] { background: var(--ui-nav-active); }
 [data-ui-style] [data-ui="activity"] button { margin-inline: 4px; width: calc(100% - 8px); border-radius: var(--radius-lg); height: 2.75rem; }
 [data-ui-style] [data-ui="activity"] button[data-active] > div:first-child { display: none; }
+/* each sidebar's root (nav > div) carries its bg + (cron / evolution) a
+   border-r; its direct children are header / filter bars with a border-b */
 [data-ui-style] [data-ui="nav"],
-[data-ui-style] [data-ui="nav"] > div,
-[data-ui-style] [data-ui="nav"] [class*="bg-[var(--card)]"]:not([class*="shadow"]),
-[data-ui-style] [data-ui="nav"] [class*="bg-[var(--background)]"]:not(input):not([class*="shadow"]) { background: transparent; }
-[data-ui-style] [data-ui="nav"] [class*="border-b"] { border-bottom-color: transparent; }
+[data-ui-style] [data-ui="nav"] > div { background: transparent; border-right-color: transparent; }
+[data-ui-style] [data-ui="nav"] > div > div { border-bottom-color: transparent; }
 
 /* gaps instead of 1px divider lines (the grab area stays as wide) */
 [data-ui-style] [data-ui="gap"] { background: transparent; }
@@ -338,8 +348,12 @@ body {
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--border) 60%, transparent), 0 1px 3px rgb(0 0 0 / 0.08);
 }
 [data-ui-style] [data-ui="dock"] > [data-ui="editor"] { height: 100%; }
-[data-ui-style] [data-ui="editor"],
-[data-ui-style] [data-ui="editor-body"] [class*="bg-[var(--background)]"] { background: var(--ui-surface); }
+/* re-pointing --background inside the editor card makes every
+   bg-[var(--background)] in it (previews, file tree, placeholders) follow the
+   Monaco surface too */
+[data-ui-style] [data-ui="editor"] { --background: var(--ui-editor-surface); }
+[data-ui-style] [data-ui="dock"] > [data-ui="editor"],
+[data-ui-style] [data-ui="editor"] { background: var(--ui-editor-surface); }
 
 /* bottom panel: its bar + the chat / session-list split become one card whose
    session list is a tinted side column, no hard rules between them */
@@ -350,13 +364,16 @@ body {
   border-left-color: transparent;
   background: color-mix(in oklab, var(--ui-backdrop) 45%, var(--ui-surface));
 }
-[data-ui-style] [data-ui="side"] > div:has(> span.truncate) { border-bottom-color: transparent; }
 
 /* title / tool bars: no rule under them, icon buttons lose their chrome */
 [data-ui-style] [data-ui="bar"],
 [data-ui-style] [data-ui="tabs"] { border-bottom-color: transparent; background: transparent; }
+/* `button.rounded` = the bars' icon buttons (shape utility, not a container);
+   unlayered `transparent` beats their hover utility, so hover is restated */
 [data-ui-style] [data-ui="bar"] button.rounded,
 [data-ui-style] [data-ui="tabs"] > button { border-color: transparent; background: transparent; }
+[data-ui-style] [data-ui="bar"] button.rounded:hover,
+[data-ui-style] [data-ui="tabs"] > button:hover { background: var(--ui-hover); }
 [data-ui-style] [data-ui="bar"] button[data-active] > div { display: none; }
 [data-ui-style] [data-ui="bar"] button[data-active] { background: var(--ui-nav-active); border-radius: var(--ui-pill); }
 [data-ui-style] [data-ui="bar"] button:not([data-active]) { border-radius: var(--ui-pill); }
@@ -367,9 +384,8 @@ body {
 [data-ui-style] [data-ui="tabs"] [draggable][data-active] { background: var(--ui-nav-active); }
 
 /* selection = inset rounded block, not an edge-to-edge strip */
-[data-ui-style] [data-ui="nav"] button[data-path],
-[data-ui-style] [data-ui="nav"] button.flex.w-full { margin-inline: 6px; width: calc(100% - 12px); border-radius: var(--radius-md); }
-[data-ui-style] [data-ui="nav"] button[data-path][class*="bg-[var(--accent)]"] { background: var(--ui-nav-active); color: var(--foreground); }
+[data-ui-style] [data-ui="nav"] [data-ui="row"] { margin-inline: 6px; width: calc(100% - 12px); border-radius: var(--radius-md); border-block-color: transparent; }
+[data-ui-style] [data-ui="nav"] [data-ui="row"][data-active] { background: var(--ui-nav-active); color: var(--foreground); }
 
 /* controls: inputs / search / composer / buttons → pill or large radius */
 /* only fully-rounded fields — a half-rounded one (quick-open's rounded-t-md
@@ -379,15 +395,22 @@ body {
 [data-ui-style] [data-ui="nav"] input { background: var(--ui-surface); }
 [data-ui-style] textarea { border-radius: var(--radius-lg); }
 
-/* floating chat / terminal window + overlays: follow the card radius */
+/* floating chat / terminal window + modal dialogs: follow the card radius */
 [data-ui-style] [data-ui="floating"],
-[data-ui-style] [data-ui="floating"] > div:first-child { border-radius: var(--ui-card-radius); }
-[data-ui-style] .shadow-lg.rounded-md,
-[data-ui-style] .shadow-lg.rounded,
-[data-ui-style] .shadow-lg.rounded-lg { border-radius: var(--radius-lg); padding-inline: 4px; }
-[data-ui-style] .shadow-lg.rounded-md > div > button,
-[data-ui-style] .shadow-lg.rounded-md > button,
-[data-ui-style] .shadow-lg.rounded-lg > button { border-radius: var(--radius-md); }
+[data-ui-style] [data-ui="floating"] > div:first-child,
+[data-ui-style] [data-ui="dialog"] { border-radius: var(--ui-card-radius); }
+/* menus / dropdowns: inset items, each item its own rounded block */
+[data-ui-style] [data-ui="menu"] { border-radius: var(--radius-lg); padding-inline: 4px; }
+[data-ui-style] [data-ui="menu"] > button,
+[data-ui-style] [data-ui="menu"] > div > button { border-radius: var(--radius-md); }
+/* sticky chat cards (sub-session report, compact summary, pinned user
+   message): inset rounded cards instead of edge-to-edge strips */
+[data-ui-style] [data-ui="pin"] {
+  top: 4px;
+  margin-inline: 6px;
+  border-radius: var(--radius-lg);
+  border-bottom-color: transparent;
+}
 
 /* soft only: roomier rows */
 [data-ui-style="soft"] [data-ui="nav"] button[data-path] { padding-block: 5px; }

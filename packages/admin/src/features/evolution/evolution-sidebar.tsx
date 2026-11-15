@@ -200,7 +200,7 @@ function EmptyState({ label }: { label: string }) {
 function RunListRow({ run, selected, onClick }: { run: RunListItem; selected: boolean; onClick: () => void }) {
   const t = useT()
   return (
-    <button
+    <button data-ui="row" data-active={selected || undefined}
       onClick={onClick}
       className={cn(
         'flex w-full flex-col gap-1 border-b border-[var(--border)] px-3 py-2 text-left text-sm transition-colors',

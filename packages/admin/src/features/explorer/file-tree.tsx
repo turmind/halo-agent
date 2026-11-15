@@ -726,7 +726,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
 
   return (
     <div>
-      <button
+      <button data-ui="row" data-active={(!isSelected && showActive) || undefined}
         draggable
         data-path={node.path}
         onClick={handleClick}

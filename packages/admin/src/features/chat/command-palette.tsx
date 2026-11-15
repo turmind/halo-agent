@@ -20,7 +20,7 @@ export function CommandPalette({ commands, selectedIndex, onSelect }: CommandPal
   if (commands.length === 0) return null
 
   return (
-    <div
+    <div data-ui="menu"
       ref={listRef}
       className="absolute bottom-full left-3 right-3 mb-1 max-h-48 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-20"
     >

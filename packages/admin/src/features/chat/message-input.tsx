@@ -254,7 +254,7 @@ function CameraPicker({ cameras, onPick, onClose }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3" onClick={onClose}>
-      <div className="flex w-[640px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div data-ui="dialog" className="flex w-[640px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <span className="text-sm font-medium text-[var(--foreground)]">{t('capture.cameraPick')}</span>
           <button onClick={onClose} className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]">
@@ -351,7 +351,7 @@ function AccessLevelSelector() {
         {!disabled && <ChevronDown className="h-2.5 w-2.5" />}
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 mb-1 min-w-[180px] rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-30">
+        <div data-ui="menu" className="absolute bottom-full left-0 mb-1 min-w-[180px] rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-30">
           {ACCESS_LEVELS.map((l) => {
             const { Icon: ItemIcon, color: itemColor } = ACCESS_ICON[l]
             return (
@@ -599,7 +599,7 @@ function CaptureControl({ modelSupportsImage }: { modelSupportsImage: boolean })
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3"
           onClick={() => setOpen(false)}
         >
-          <div
+          <div data-ui="dialog"
             className="flex h-[92vh] w-[96vw] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)] shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >

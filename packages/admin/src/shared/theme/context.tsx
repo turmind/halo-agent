@@ -27,8 +27,10 @@ function applyTheme(theme: Theme) {
   else document.documentElement.dataset.theme = theme
 }
 
-/** Same scheme for <html data-ui-style>: classic is the unstyled default, so
- *  the attribute is dropped and the classic DOM stays byte-identical. */
+/** <html data-ui-style>: modern is the default style, but classic is the one
+ *  without the attribute — every globals.css style rule is scoped under
+ *  [data-ui-style], so an explicit classic pick renders the original look
+ *  untouched. */
 function applyUiStyle(style: UiStyle) {
   if (typeof document === 'undefined') return
   if (style === 'classic') delete document.documentElement.dataset.uiStyle
@@ -66,9 +68,9 @@ function detectInitialTheme(): Theme {
 }
 
 function detectInitialUiStyle(): UiStyle {
-  if (typeof window === 'undefined') return 'classic'
+  if (typeof window === 'undefined') return 'modern'
   const stored = localStorage.getItem('halo_ui_style')
-  return isUiStyle(stored) ? stored : 'classic'
+  return isUiStyle(stored) ? stored : 'modern'
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -101,7 +103,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setThemeState(next)
       applyTheme(next)
       const styleValue = valueOf('ui_style')
-      const nextStyle = isUiStyle(styleValue) ? styleValue : 'classic'
+      const nextStyle = isUiStyle(styleValue) ? styleValue : 'modern'
       applyUiStyle(nextStyle)
       if (typeof window !== 'undefined') {
         localStorage.setItem('halo_theme', next)

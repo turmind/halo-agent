@@ -1278,7 +1278,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       </div>
 
       {/* Content area */}
-      <PanelGroup direction="horizontal" autoSaveId={showTreeSidebar ? 'halo-editor-tree' : undefined} data-ui="editor-body">
+      <PanelGroup direction="horizontal" autoSaveId={showTreeSidebar ? 'halo-editor-tree' : undefined}>
         {showTreeSidebar && (
           <>
           <Panel defaultSize={20} minSize={10} maxSize={40}>

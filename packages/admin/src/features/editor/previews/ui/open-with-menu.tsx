@@ -40,7 +40,7 @@ export function OpenWithMenu({ candidates, current, onPick }: {
       {open && (
         <>
           <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-30 mt-0.5 min-w-[180px] rounded-md border border-[var(--border)] bg-[var(--background)] py-1 shadow-lg">
+          <div data-ui="menu" className="absolute right-0 top-full z-30 mt-0.5 min-w-[180px] rounded-md border border-[var(--border)] bg-[var(--background)] py-1 shadow-lg">
             {candidates.map((r) => {
               const key = resolvedKey(r)
               const active = key === currentKey

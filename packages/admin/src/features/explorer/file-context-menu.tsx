@@ -74,7 +74,7 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
   // Bulk mode: download (one zip of the selection) and delete
   if (isBulk) {
     return (
-      <div ref={menuRef} style={style} className="min-w-[140px] rounded-md border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
+      <div data-ui="menu" ref={menuRef} style={style} className="min-w-[140px] rounded-md border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
         <div className="truncate border-b border-[var(--border)] px-3 py-1.5 text-[10px] text-[var(--muted-foreground)]">
           {t('explorer.menu.selectedItems', { n: selectedCount })}
         </div>
@@ -142,7 +142,7 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
       ]
 
   return (
-    <div ref={menuRef} style={style} className="min-w-[140px] rounded-md border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
+    <div data-ui="menu" ref={menuRef} style={style} className="min-w-[140px] rounded-md border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
       <div className="truncate border-b border-[var(--border)] px-3 py-1.5 text-[10px] text-[var(--muted-foreground)]">
         {name}
       </div>

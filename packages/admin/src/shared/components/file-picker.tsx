@@ -136,7 +136,7 @@ export function FilePicker({ workspace, accept, start, onDone }: Props) {
       className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-3"
       onPointerDown={(e) => { if (e.target === e.currentTarget) finish(null) }}
     >
-      <div ref={panelRef} tabIndex={-1} className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-xl outline-none">
+      <div data-ui="dialog" ref={panelRef} tabIndex={-1} className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-xl outline-none">
         <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
           <span className="text-sm font-medium">{t('picker.title')}</span>
           {accept.length > 0 && <span className="truncate text-[10px] text-[var(--muted-foreground)]">{accept.join(' ')}</span>}

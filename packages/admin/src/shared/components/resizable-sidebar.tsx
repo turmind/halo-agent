@@ -107,7 +107,7 @@ export function ResizableSidebar({ openKey, widthKey, defaultWidth, title, child
     const Icon = expand ? PanelRightOpen : PanelRightClose
     return (
       <>
-        <div className="flex h-7 shrink-0 items-center justify-between gap-1 border-b border-[var(--border)] pl-2 pr-1">
+        <div data-ui="bar" className="flex h-7 shrink-0 items-center justify-between gap-1 border-b border-[var(--border)] pl-2 pr-1">
           <span className="truncate text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">{title}</span>
           <button
             onClick={(e) => setOpen(expand, e)}

@@ -113,7 +113,7 @@ function AgentSelector() {
         {!locked && <ChevronDown className="h-2.5 w-2.5" />}
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 mb-1 min-w-[160px] max-h-60 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-30">
+        <div data-ui="menu" className="absolute bottom-full left-0 mb-1 min-w-[160px] max-h-60 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-30">
           {agents.map((a) => (
             <button
               key={`${a.id}:${a.scope}`}

@@ -290,7 +290,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
 
       {logRunId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setLogRunId(null)}>
-          <div className="flex h-[80vh] w-[800px] max-w-full flex-col overflow-hidden rounded border border-[var(--border)] bg-[var(--background)]" onClick={(e) => e.stopPropagation()}>
+          <div data-ui="dialog" className="flex h-[80vh] w-[800px] max-w-full flex-col overflow-hidden rounded border border-[var(--border)] bg-[var(--background)]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 text-xs">
               <span>{t('cron.log.title', { id: logRunId })}</span>
               <button onClick={() => setLogRunId(null)} className="rounded px-2 py-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)]">{t('cron.log.close')}</button>
@@ -1064,7 +1064,7 @@ function ChatIdField({ channelType, accountId, value, onChange, placeholder }: {
         className="input-base font-mono text-[11px]"
       />
       {supportsSearch && open && (loading || hits.length > 0) && (
-        <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] shadow-lg">
+        <div data-ui="menu" className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] shadow-lg">
           {loading && <div className="px-2 py-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.searching')}</div>}
           {!loading && hits.map((h) => (
             <button

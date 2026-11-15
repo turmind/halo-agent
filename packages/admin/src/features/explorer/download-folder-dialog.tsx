@@ -94,7 +94,7 @@ export function DownloadFolderDialog({ paths, projectId, onClose }: { paths: str
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
+      <div data-ui="dialog"
         role="dialog"
         aria-label={title}
         className="w-[420px] rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl"

@@ -20,7 +20,7 @@ export function CredentialsModal({ projectId, onClose, onSaved }: CredentialsMod
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
+      <div data-ui="dialog"
         className="w-[460px] rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >

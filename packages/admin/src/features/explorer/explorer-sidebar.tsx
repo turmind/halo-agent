@@ -154,7 +154,7 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
             className="w-full rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none focus:border-[var(--primary)]"
           />
           {dropdownOpen && recentMatches.length > 0 && (
-            <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] py-1 shadow-lg">
+            <div data-ui="menu" className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] py-1 shadow-lg">
               {recentMatches.map((p) => (
                 <div
                   key={p}
