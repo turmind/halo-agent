@@ -20,6 +20,7 @@ Monaco-based multi-tab code editor + binary file previewer — surfaced in the U
 - Unsaved tabs show a small amber dot (the ✕ appears on hover)
 - Closing an unsaved tab prompts for confirmation
 - The tab bar's **Split right** button opens a second pane (two at most); each pane has its own tabs, Edit/Preview and Diff state
+- Tabs that don't fit scroll sideways — a horizontal trackpad swipe / Shift+wheel over the bar, or the ‹ › arrows at its edges (shown only when there is more to that side); no visible scrollbar
 
 ### Save
 - `Cmd+S` / `Ctrl+S` calls `PUT /api/files`
