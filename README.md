@@ -101,7 +101,7 @@ The primary agent's reasoning, every tool call (sub-agents' included) and every 
 ## Also in the box
 
 - **Per-agent models** — each agent picks its own provider and model: the built-ins ship with Claude Opus for the primary agent and Claude Sonnet for the executors it fans out, and routine sub-tasks can go to a cheap model. No code changes.
-- **IDE-grade admin** — chat + Monaco editor + file explorer + git panel + terminal (xterm.js) in one browser tab, in four themes.
+- **IDE-grade admin** — chat + Monaco editor + file explorer + git panel + terminal (xterm.js) in one browser tab, in four color themes and three UI styles (modern / soft / classic); on a phone it switches to its own single-column layout (chat first, bottom nav) rather than shrinking the desktop.
 - **Skills and agents are files** — a skill is markdown injected on demand; an agent is a persona plus an `agent.yaml`. Workspace-scoped or global, no code required.
 - **Extensions** — installable viewers and small apps from [halo-hub](https://github.com/turmind/halo-hub): 3D models, draw.io, Excalidraw, Jupyter notebooks, a meeting recorder and more. Besides opening files in the editor, an extension can add a page to the activity bar (Halo City) or a button to the chat input toolbar (voice input). Install with `/extension install <id>` or a zip under **Settings → Extensions** ([design](.halo/docs/design/canvas-extensions.md)).
 - **Voice input** — `/extension install voice-input` adds a mic to the chat toolbar: click to record, click again to stop, and the text lands at the cursor; it never sends. Speech is transcribed on your own Halo server (SenseVoice-Small + Silero VAD via sherpa-onnx, shipped inside the extension) in Mandarin, English, Cantonese, Japanese or Korean, with Mandarin written in Simplified characters. Audio never leaves your server and no cloud API is involved. Confirm the extension once under Settings → Extensions (it runs a program on the server); it then downloads the ~240 MB model once, uses about 400 MB of RAM while in use and gives it back after 5 idle minutes ([design](.halo/docs/design/stt-local.md)).
@@ -141,7 +141,7 @@ Telegram, Slack, Feishu, WeCom and WeChat all connect outbound — no public URL
 
 | Channel | Transport | Notes |
 |---|---|---|
-| **Admin** | WebSocket | Full-featured browser UI |
+| **Admin** | WebSocket | Full-featured browser UI, desktop or phone |
 | **Web** | HTTP + SSE | Token-authenticated API, independently deployable — see [curl example](#talk-to-it-from-curl) |
 | **CLI / TUI** | local | Standalone terminal client, embedded agent loop (no server required) |
 | **Telegram** | Bot API | Long polling |

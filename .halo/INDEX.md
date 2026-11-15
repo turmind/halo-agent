@@ -38,7 +38,7 @@ File names match module names (`session.md`, `agent.md`); create a new folder wh
 
 Onboarding guides at [guide/channels/](docs/guide/channels/), design at `design/<channel>.md`:
 
-- **Admin**: browser panel over WebSocket — [design/ws.md](docs/design/ws.md)
+- **Admin**: browser panel over WebSocket — [design/ws.md](docs/design/ws.md). Under 768px, or a phone in landscape, it becomes a single-column phone layout: chat first, bottom nav, list → detail, bottom sheets. Code: admin `features/workspace/mobile-shell.tsx` + `shared/use-is-mobile.ts` (`MOBILE_QUERY` = the phone `@media` in `globals.css`, keep in sync) · Docs: [requirements/mobile.md](docs/requirements/mobile.md), [design/ui-style.md](docs/design/ui-style.md#phone-layout)
 - **Web**: HTTP + SSE, token auth, for custom frontends / scripts — [design/web.md](docs/design/web.md)
 - **Telegram** (Bot API long polling) · **Slack** (Socket Mode) · **Feishu / Lark** (long-connect, appId + appSecret) · **WeCom** (智能机器人 wss, no HTTP send API) · **WeChat** (scan to bind, default agent)
 - **CLI/TUI**: standalone terminal client, embedded agent loop, no server — [guide/cli.md](docs/guide/cli.md)

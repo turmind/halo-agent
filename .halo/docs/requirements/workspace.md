@@ -2,6 +2,8 @@
 
 Overall workspace layout: Activity Bar + Sidebar + main content; the Explorer tab adds a resizable bottom panel.
 
+This is the desktop layout. Below 768px wide, or on a phone in landscape, the admin switches to a single-column phone layout instead — see [mobile.md](mobile.md).
+
 ## Layout structure
 
 The Explorer tab uses the layout with the docked bottom panel:

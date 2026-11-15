@@ -100,7 +100,7 @@ my-project/
 ## 开箱即有
 
 - **按 Agent 选模型** —— 每个 Agent 各自选 provider 和模型：内置 Agent 出厂时，主 Agent 用 Claude Opus，它派出去的 executor 用 Claude Sonnet；例行子任务也可以交给便宜的模型，零代码改动。
-- **IDE 级管理台** —— 聊天 + Monaco 编辑器 + 文件树 + Git 面板 + 终端（xterm.js），一个浏览器标签页全搞定，四套主题可选。
+- **IDE 级管理台** —— 聊天 + Monaco 编辑器 + 文件树 + Git 面板 + 终端（xterm.js），一个浏览器标签页全搞定，四套配色主题、三种界面风格（modern / soft / classic）可选；手机上是专门的单栏布局（对话优先、底部导航），不是把桌面版缩小。
 - **技能和 Agent 都是文件** —— 技能是按需注入的 Markdown，Agent 是一份人设加一个 `agent.yaml`。工作区级或全局，不用写代码。
 - **扩展** —— 来自 [halo-hub](https://github.com/turmind/halo-hub) 的查看器和小应用：3D 模型、draw.io、Excalidraw、Jupyter 笔记本、会议录音等。除了在编辑器里打开文件，扩展还能在左侧活动栏加一个页面（如 Halo City），或在聊天输入栏加一个按钮（如语音输入）。用 `/extension install <id>` 安装，或在 **Settings → Extensions** 上传 zip（[设计](.halo/docs/design/canvas-extensions.md)）。
 - **语音输入** —— `/extension install voice-input` 之后，聊天输入栏会多一个麦克风：点一下开始录，再点一下停止，文字插到光标处，永远不会自动发送。转写就在你自己的 Halo 服务器上跑（SenseVoice-Small + Silero VAD，基于 sherpa-onnx，随扩展一起安装），支持普通话、英语、粤语、日语和韩语，普通话输出简体。音频不出你的服务器，也不调用任何云端 API。装好后要在 设置 → 扩展 里确认一次（它会在服务器上运行一个程序）；之后自动下载约 240 MB 的模型，只下一次；使用时占约 400 MB 内存，闲置 5 分钟后释放（[设计](.halo/docs/design/stt-local.md)）。
@@ -140,7 +140,7 @@ Telegram、Slack、飞书、企业微信和微信都是主动向外连接 ——
 
 | 渠道 | 传输 | 说明 |
 |---|---|---|
-| **Admin** | WebSocket | 全功能浏览器管理台 |
+| **Admin** | WebSocket | 全功能浏览器管理台，桌面和手机都能用 |
 | **Web** | HTTP + SSE | Token 鉴权 API，可独立部署 —— 见 [curl 示例](#用-curl-直接对话) |
 | **CLI / TUI** | 本地 | 独立终端客户端，内嵌 Agent 循环（无需服务器） |
 | **Telegram** | Bot API | 长轮询 |
