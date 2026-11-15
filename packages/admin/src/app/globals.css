@@ -539,4 +539,66 @@ body {
   }
   [data-ui="menu"] > button,
   [data-ui="menu"] > div > button { min-height: 44px; font-size: 15px; }
+
+  /* -- no sideways overflow ------------------------------------------------
+     The shell is fixed + overflow-hidden, so the document never widens; what
+     breaks is a page's own `overflow-y-auto` box — overflow-y forces
+     overflow-x to auto, and one too-wide child (a desktop grid, a 240px
+     combobox, an unbreakable token) turns the whole page into a sideways
+     scroller that focus / scrollIntoView then shifts. So: every box may
+     shrink, text breaks anywhere, page scrollers clip x, and the one thing
+     still allowed to scroll sideways is a pre / code block / table, inside
+     itself. Checked by .halo/tmp/mobile-eval/overflow/scan.mjs. */
+  [data-m="shell"], [data-ui="dialog"] { overflow-wrap: anywhere; }
+  [data-m="shell"] :is([data-ui~="card"], [data-ui="main"], [data-ui="nav"], [data-m-pane], [data-m="list"], [data-m="detail"]) { min-width: 0; max-width: 100%; }
+  /* flex / grid items default to min-width:auto = their min-content, which a
+     truncate / anywhere descendant can't lower (svg icons keep their size) */
+  :is([data-m="shell"], [data-ui="dialog"]) :is(.flex, .inline-flex, .grid) > :not(svg) { min-width: 0; }
+  :is([data-m="shell"], [data-ui="dialog"]) .overflow-y-auto:not(.overflow-x-auto) { overflow-x: hidden; }
+  :is([data-m="shell"], [data-ui="dialog"]) pre { max-width: 100%; }
+  [data-m="shell"] .prose table { display: block; max-width: 100%; overflow-x: auto; }
+  [data-m="shell"] .prose :is(td, th) { overflow-wrap: normal; }
+  /* a pill that must stay one piece next to a wrapping neighbour may still
+     shrink (and then wrap its own words) instead of riding over it */
+  :is([data-m="shell"], [data-ui="dialog"]) :is(.flex-wrap, .flex.items-baseline, [data-ui="strip"], [data-ui="strip"] .flex, .flex.justify-between) > span.shrink-0 { flex-shrink: 1; }
+
+  /* -- forms: one column ---------------------------------------------------
+     Desktop field grids (`grid-cols-[1fr_1fr_80px]`, `grid-cols-4`…) are
+     minmax(auto, 1fr) tracks that a combobox's inline min-width pushes past
+     the screen. A grid holding a text / select / textarea field → one column;
+     a grid of only number fields (maxTokens / compressAt) or plain values →
+     two. Auto-fill grids (`grid-cols-[repeat(…)]`) size themselves. */
+  :is([data-m="shell"], [data-ui="dialog"]) .grid[class*="grid-cols-"]:not([class*="grid-cols-[repeat"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  :is([data-m="shell"], [data-ui="dialog"]) .grid[class*="grid-cols-"]:not([class*="grid-cols-[repeat"]):has(input:not([type="number"]):not([type="checkbox"]):not([type="radio"]), select, textarea) { grid-template-columns: minmax(0, 1fr); }
+  /* Combobox carries `style={{ minWidth }}` (240px default) on its wrapper */
+  :is([data-m="shell"], [data-ui="dialog"]) div.relative[style*="min-width"]:has(> input) { min-width: 0 !important; }
+  /* system prompt editor: 13px mono fits ~45 chars a line instead of ~36.
+     iOS zooms the page on focusing a < 16px field, so it keeps 16px there
+     (-webkit-touch-callout is WebKit-only = every iOS browser). */
+  [data-m="shell"] textarea.font-mono { font-size: 13px; }
+  @supports (-webkit-touch-callout: none) { [data-m="shell"] textarea.font-mono { font-size: 16px; } }
+
+  /* -- header rows wrap ----------------------------------------------------
+     Toolbars / meta strips (session viewer, agent, cron) are one fixed-height
+     nowrap row on desktop; on a phone they wrap onto a second line rather
+     than hide items behind a menu (pure CSS, nothing to discover). */
+  [data-m="shell"] [data-ui="strip"],
+  [data-m="shell"] [data-ui="strip"] .flex:not(.flex-col) { flex-wrap: wrap; row-gap: 4px; }
+  [data-m="shell"] [data-ui="strip"]:is(.h-10, .h-9) { height: auto; min-height: 2.5rem; padding-block: 6px; }
+  :is([data-m="shell"], [data-ui="dialog"]) .flex.justify-between:not([data-ui="row"]),
+  :is([data-m="shell"], [data-ui="dialog"]) .flex.justify-between:not([data-ui="row"]) > .flex:not(.flex-col),
+  :is([data-m="shell"], [data-ui="dialog"]) .flex.items-baseline { flex-wrap: wrap; row-gap: 4px; }
+  /* report bubbles' title row (label · session id pill): the row wraps, the
+     label stays one line, the id pill breaks inside the bubble */
+  [data-m="shell"] [data-ui="pin"] > button.flex:not(:has(> .truncate)) { flex-wrap: wrap; row-gap: 2px; }
+  [data-m="shell"] [data-ui="pin"] > button.flex > span:not(.font-mono):not(.truncate) { white-space: nowrap; }
+
+  /* -- detail pages scroll as one -----------------------------------------
+     cron / evolution details are a fixed header strip + a flex-1 scroller;
+     a wrapped header on a phone outgrows the screen and pushes the scroller
+     under the bottom nav. The whole column scrolls instead (not forms with a
+     pinned footer bar — the cron form's Save stays put). */
+  [data-m="detail"] > .flex.h-full.flex-col:not([data-ui]):not(:has(> .border-t)):has(> .flex-1.overflow-y-auto) { overflow-y: auto; overflow-x: hidden; }
+  [data-m="detail"] > .flex.h-full.flex-col:not([data-ui]):not(:has(> .border-t)):has(> .flex-1.overflow-y-auto) > * { flex-shrink: 0; }
+  [data-m="detail"] > .flex.h-full.flex-col:not([data-ui]):not(:has(> .border-t)):has(> .flex-1.overflow-y-auto) > .flex-1.overflow-y-auto { overflow-y: visible; min-height: auto; }
 }
