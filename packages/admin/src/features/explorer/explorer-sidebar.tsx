@@ -108,7 +108,7 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
     e.target.value = ''
   }
 
-  const projectName = activeProject?.path.split('/').filter(Boolean).pop()?.toUpperCase() ?? 'EXPLORER'
+  const projectName = activeProject?.path.split('/').filter(Boolean).pop() ?? 'EXPLORER'
 
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">

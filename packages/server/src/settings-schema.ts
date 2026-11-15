@@ -146,6 +146,9 @@ function generalSection(): SchemaSection {
       // admin UI color theme. Consumed only by the admin frontend (shared/theme);
       // stored server-side so the choice follows the user across browsers.
       { key: 'theme', type: 'enum', options: ['dark', 'light', 'midnight', 'warm'], optionLabels: ['Dark', 'Light', 'Midnight', 'Warm'], globalOnly: true, description: 'Admin UI color theme.', description_zh: 'Admin 界面配色主题。', default: 'dark' },
+      // admin UI style (shape / spacing / type), orthogonal to `theme` (colors).
+      // Same plumbing as theme: consumed only by the admin frontend.
+      { key: 'ui_style', type: 'enum', options: ['classic', 'soft', 'modern'], optionLabels: ['Classic', 'Soft', 'Modern'], globalOnly: true, description: 'Admin UI style — shape, spacing and type size, independent of the color theme. Classic is the original IDE look; Soft uses rounded floating cards; Modern is a compact panelled IDE look.', description_zh: 'Admin 界面风格（圆角、间距、字号），与配色主题互相独立。经典 = 原来的 IDE 外观；柔和 = 圆角浮动卡片；现代 = 紧凑的分块 IDE 外观。', default: 'classic' },
       { key: 'agent.max_retries', type: 'int', globalOnly: true, restartRequired: true, description: 'Max attempts per model call on transient errors (rate limit, 5xx, network). Backoff grows between attempts.', description_zh: '单次模型调用遇到瞬态错误（限流、5xx、网络）时的最大尝试次数，重试间隔递增。', default: '5' },
       // server — network-facing knobs; global-only since they alter how the
       // server itself authenticates clients.
@@ -214,9 +217,9 @@ function generalSection(): SchemaSection {
     ] as Array<Omit<SchemaField, 'kind'>>).map((f) => ({
       ...f,
       kind: 'param' as const,
-      // Only language + theme stay in the open; everything else is folded
-      // under the UI's collapsed "Advanced" area.
-      advanced: f.key !== 'language' && f.key !== 'theme',
+      // Only language + theme + ui_style stay in the open; everything else is
+      // folded under the UI's collapsed "Advanced" area.
+      advanced: f.key !== 'language' && f.key !== 'theme' && f.key !== 'ui_style',
     })),
   }
 }

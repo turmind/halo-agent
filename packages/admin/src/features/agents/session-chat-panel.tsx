@@ -333,7 +333,7 @@ export function SessionChatPanel({ visible }: { visible: boolean }) {
   }, [messages, pinToBottom])
 
   return (
-    <div className="flex h-full flex-col bg-[var(--background)]">
+    <div data-ui="card" className="flex h-full flex-col bg-[var(--background)]">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 min-w-0">
         {selectedSessionId ? (
           <>

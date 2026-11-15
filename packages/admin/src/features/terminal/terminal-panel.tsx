@@ -484,9 +484,9 @@ export function TerminalPanel({ headerless, onActiveNameChange }: TerminalPanelP
   return (
     // Wrapper matches each xterm palette's `background`, which is pinned to
     // the theme's --background — no seam around the canvas.
-    <div className="flex h-full min-h-0 bg-[var(--background)]">
+    <div data-ui="chat" className="flex h-full min-h-0 bg-[var(--background)]">
       {/* Terminal host — main area */}
-      <div ref={hostRef} className="relative min-h-0 flex-1 overflow-hidden" />
+      <div ref={hostRef} data-ui="card" className="relative min-h-0 flex-1 overflow-hidden" />
       {menu && <TerminalContextMenu x={menu.x} y={menu.y} term={menu.term} onClose={closeMenu} />}
 
       {/* Right sidebar — terminal list (collapsible, drag to resize) */}

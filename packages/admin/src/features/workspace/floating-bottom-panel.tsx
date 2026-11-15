@@ -140,6 +140,7 @@ export function FloatingBottomPanel({ slotRef, dragHandleRef }: FloatingBottomPa
 
   return (
     <div
+      data-ui="floating"
       className="fixed z-50 flex flex-col rounded-md border border-[var(--border)] bg-[var(--background)] shadow-2xl"
       style={style}
     >

@@ -86,10 +86,10 @@ describe('resolveSandboxPaths', () => {
 })
 
 describe('general schema flags', () => {
-  it('only language + theme sit outside the Advanced fold', async () => {
+  it('only language + theme + ui_style sit outside the Advanced fold', async () => {
     const { loadSettingsSchema } = await import('../src/settings-schema.js')
     const general = loadSettingsSchema().find((s) => s.namespaceId === 'general')!
-    expect(general.fields.filter((f) => !f.advanced).map((f) => f.key)).toEqual(['language', 'theme'])
+    expect(general.fields.filter((f) => !f.advanced).map((f) => f.key)).toEqual(['language', 'theme', 'ui_style'])
     expect(general.fields.some((f) => f.key === 'agent.default_provider')).toBe(false)
   })
 

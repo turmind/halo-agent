@@ -562,6 +562,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         key={tab.id}
         onClick={() => { handleTabClick(tab.id); drawer.close() }}
         aria-label={tab.label}
+        data-active={isActive || undefined}
         className={cn(
           'relative flex h-12 w-full shrink-0 items-center overflow-hidden transition-colors hover:text-[var(--foreground)]',
           isActive ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)]',
@@ -577,7 +578,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   }
 
   return (
-    <div className="flex h-full">
+    <div data-ui="shell" className="flex h-full">
       {/* Activity Bar — hidden when maximized. The w-12 box only holds the
           place; the bar itself is an absolute layer that widens into the
           hover drawer over the sidebar / main area, so nothing reflows. Rows
@@ -593,6 +594,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       <div className={cn('relative w-12 shrink-0', maximized && 'hidden')}>
         <div
           {...drawer.bind}
+          data-ui="activity"
           className={cn(
             'absolute inset-y-0 left-0 flex flex-col border-r border-[var(--border)] bg-[var(--card)] py-2 transition-[width,box-shadow] duration-150 ease-out motion-reduce:transition-none',
             drawer.open ? 'w-60 shadow-[6px_0_16px_-6px_rgba(0,0,0,0.35)]' : 'w-12',
@@ -616,7 +618,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       {/* Explorer — always mounted so CanvasPanel/Monaco/file tree survive activity-tab switches and maximize.
           Visibility controlled by CSS (hidden when not active). Maximized = covers the viewport.
           The PanelGroup stays mounted; sidebar Panel collapses to 0 when hidden to avoid remounts. */}
-      <div className={cn(
+      <div data-ui="main" className={cn(
         'flex min-w-0 flex-1',
         !isExplorer && 'hidden',
         maximized && 'fixed inset-0 z-40 bg-[var(--background)]',
@@ -635,7 +637,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           constraints, which match Explorer's, so the two mounted groups would
           overwrite each other's sidebar width. */}
       {sessionsMounted && (
-        <div className={cn('flex min-w-0 flex-1', (activeTab !== 'sessions' || maximized) && 'hidden')}>
+        <div data-ui="main" className={cn('flex min-w-0 flex-1', (activeTab !== 'sessions' || maximized) && 'hidden')}>
           <ExplorerRootPanelGroup
             autoSaveId="halo-h-sessions"
             showSidebar={sidebarOpen}
@@ -648,9 +650,9 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       {/* Other tabs — keep the original conditional-render behavior (they get destroyed/rebuilt on switch) */}
       {!isExplorer && activeTab !== 'sessions' && !maximized && (
         nonExplorerHasSidebar ? (
-          <PanelGroup direction="horizontal" autoSaveId="halo-h-sidebar" className="flex-1">
+          <PanelGroup direction="horizontal" autoSaveId="halo-h-sidebar" className="flex-1" data-ui="main">
             <Panel defaultSize={22} minSize={15} maxSize={40}>
-              <div className="h-full overflow-hidden">
+              <div data-ui="nav" className="h-full overflow-hidden">
                 {activeTab === 'source-control' && <SourceControlSidebar />}
                 {activeTab === 'skills' && <SkillsSidebar />}
                 {activeTab === 'channels' && <ChannelsSidebar />}
@@ -658,13 +660,13 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
                 {activeTab === 'cron' && <CronSidebar />}
               </div>
             </Panel>
-            <PanelResizeHandle className="w-px bg-[var(--border)] hover:w-1 hover:bg-[var(--primary)] transition-colors" />
-            <Panel defaultSize={78} minSize={40}>
+            <PanelResizeHandle data-ui="gap" className="w-px bg-[var(--border)] hover:w-1 hover:bg-[var(--primary)] transition-colors" />
+            <Panel defaultSize={78} minSize={40} data-ui="card">
               <NonExplorerMainArea activeTab={activeTab} />
             </Panel>
           </PanelGroup>
         ) : (
-          <div className="flex-1 min-w-0 overflow-hidden">
+          <div data-ui="main card" className="flex-1 min-w-0 overflow-hidden">
             {activeExtension
               ? <ExtensionActivityPanel key={`${activeExtension.id}@${activeExtension.version}`} info={activeExtension} />
               : <NonExplorerMainArea activeTab={activeTab} />}
@@ -713,7 +715,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       {/* Maximized bottom panel — full viewport like editor maximize. Empty
           slot; the single BottomPanel host is moved here while maximized. */}
       {bottomMaximized && !bottomFloating && (
-        <div ref={setOverlayBottomSlot} className="fixed inset-0 z-50 bg-[var(--background)]" />
+        <div ref={setOverlayBottomSlot} data-ui="main" className="fixed inset-0 z-50 bg-[var(--background)]" />
       )}
 
       {/* The one and only BottomPanel. Rendered once into a stable detached
@@ -749,9 +751,9 @@ function ExplorerRootPanelGroup({ showSidebar, sidebar, main, autoSaveId = 'halo
   return (
     <PanelGroup ref={groupRef} direction="horizontal" autoSaveId={autoSaveId} className="flex-1">
       <Panel defaultSize={22} minSize={0} maxSize={40} collapsible>
-        <div className={cn('h-full overflow-hidden', !showSidebar && 'hidden')}>{sidebar}</div>
+        <div data-ui="nav" className={cn('h-full overflow-hidden', !showSidebar && 'hidden')}>{sidebar}</div>
       </Panel>
-      <PanelResizeHandle className={cn(
+      <PanelResizeHandle data-ui="gap" className={cn(
         'w-px bg-[var(--border)] hover:w-1 hover:bg-[var(--primary)] transition-colors',
         !showSidebar && 'pointer-events-none opacity-0',
       )} />
@@ -785,14 +787,14 @@ function ExplorerMainArea({ projectId, showBottom, bottomSlotRef }: { projectId:
 
   return (
     <PanelGroup ref={groupRef} direction="vertical" autoSaveId="halo-v-editor" className="h-full">
-      <Panel defaultSize={65} minSize={20}>
+      <Panel defaultSize={65} minSize={20} data-ui="dock">
         <EditorPanel projectId={projectId} mode="editor-only" />
       </Panel>
-      <PanelResizeHandle className={cn(
+      <PanelResizeHandle data-ui="gap" className={cn(
         'h-px bg-[var(--border)] hover:h-1 hover:bg-[var(--primary)] transition-colors',
         !showBottom && 'pointer-events-none opacity-0',
       )} />
-      <Panel defaultSize={35} minSize={0} collapsible>
+      <Panel defaultSize={35} minSize={0} collapsible data-ui="dock">
         <div ref={bottomSlotRef} className={cn('h-full', !showBottom && 'hidden')} />
       </Panel>
     </PanelGroup>

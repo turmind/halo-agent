@@ -1228,9 +1228,9 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   const showTreeSidebar = mode === 'full' && showSidebar
 
   return (
-    <div className="flex h-full flex-col bg-[var(--background)]">
+    <div data-ui="editor" className="flex h-full flex-col bg-[var(--background)]">
       {/* Panel header */}
-      <div className={cn('flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] px-3', immersive && 'hidden')}>
+      <div data-ui="bar" className={cn('flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] px-3', immersive && 'hidden')}>
         <div className="flex items-center gap-2">
           {mode === 'full' && (
             <button
@@ -1278,7 +1278,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       </div>
 
       {/* Content area */}
-      <PanelGroup direction="horizontal" autoSaveId={showTreeSidebar ? 'halo-editor-tree' : undefined}>
+      <PanelGroup direction="horizontal" autoSaveId={showTreeSidebar ? 'halo-editor-tree' : undefined} data-ui="editor-body">
         {showTreeSidebar && (
           <>
           <Panel defaultSize={20} minSize={10} maxSize={40}>

@@ -261,6 +261,7 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
 
   return (
     <div
+      data-ui="tabs"
       className={cn(
         'relative flex shrink-0 items-center border-b border-[var(--border)] bg-[var(--card)]',
         crossPaneOver && 'ring-1 ring-[var(--primary)]',
@@ -299,6 +300,7 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
                 e.preventDefault()
                 setCtxMenu({ x: e.clientX, y: e.clientY, path: tab.path })
               }}
+              data-active={isActive || undefined}
               className={cn(
                 'group relative flex items-center gap-1.5 border-r border-[var(--border)] px-3 py-1.5 text-xs cursor-pointer transition-colors select-none',
                 isActive

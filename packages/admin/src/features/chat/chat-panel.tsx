@@ -199,9 +199,9 @@ export function ChatPanel({ onTitleChange }: {
   )
 
   return (
-    <div className="flex h-full min-h-0 bg-[var(--background)]">
+    <div data-ui="chat" className="flex h-full min-h-0 bg-[var(--background)]">
       {/* Chat column — messages + composer */}
-      <div className="flex h-full min-w-0 flex-1 flex-col">
+      <div data-ui="card" className="flex h-full min-w-0 flex-1 flex-col">
         {/* Keyed by tab: only the tab on screen renders, and its scroll /
             render-window state starts from what it saved on its last show. */}
         {activeTab && (

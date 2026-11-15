@@ -222,3 +222,173 @@ body {
 [data-panel-resize-handle-id][data-resize-handle-active] {
   background: var(--primary);
 }
+
+/*
+ * UI style — <html data-ui-style="soft|modern"> picks a shape / spacing / type
+ * layer that is orthogonal to data-theme (colors). classic = no attribute =
+ * none of the rules below match, so the original look is untouched.
+ *
+ * Two mechanisms, because the ~600 call sites hardcode their classes:
+ *  1. Tailwind v4 theme variables. `rounded-md/lg/xl`, `text-xs/sm` compile to
+ *     var(--radius-*) / var(--text-*), so redefining those per style restyles
+ *     every such call site with no TSX change.
+ *  2. Literal utilities. Bare `rounded` (@theme inline → .25rem) and arbitrary
+ *     `text-[10px]` / `text-[11px]` compile to constants, so they're overridden
+ *     by class selector here (same specificity + later in the cascade than the
+ *     utilities layer — unlayered rules win over @layer utilities).
+ * Panel layout (backdrop, floating cards, gaps) keys off the `data-ui` hooks on
+ * the few layout containers (workspace-layout / editor-panel / bottom-panel /
+ * chat-panel / resizable-sidebar). Surface colors are mixed from the active
+ * theme's variables, never a per-theme palette.
+ */
+[data-ui-style] {
+  /* backdrop the floating cards sit on: a step darker (dark themes) / greyer
+     (light themes) than the card surface */
+  --ui-backdrop: color-mix(in oklab, var(--muted) 55%, var(--background));
+  --ui-surface: var(--background);
+  --ui-nav-active: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --ui-hover: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+[data-ui-style="soft"] {
+  --radius: 0.75rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.125rem;
+  --radius-2xl: 1.375rem;
+  --ui-card-radius: 14px;
+  --ui-gap: 8px;
+  --ui-pill: 9999px;
+  --text-xs: 0.8125rem;      /* 12 → 13px */
+  --text-xs--line-height: calc(1.125rem / 0.8125rem);
+  --text-sm: 0.875rem;       /* 14px stays */
+  --ui-text-11: 12px;
+  --ui-text-10: 11.5px;
+  --ui-text-9: 10px;
+}
+[data-ui-style="modern"] {
+  --radius: 0.5rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.4375rem;
+  --radius-lg: 0.5625rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --ui-card-radius: 9px;
+  --ui-gap: 5px;
+  --ui-pill: 7px;
+  --text-xs: 0.78125rem;     /* 12 → 12.5px */
+  --text-xs--line-height: calc(1.0625rem / 0.78125rem);
+  --text-sm: 0.8125rem;      /* 14 → 13px */
+  --text-sm--line-height: calc(1.25rem / 0.8125rem);
+  --ui-text-11: 11.5px;
+  --ui-text-10: 10.5px;
+  --ui-text-9: 9.5px;
+}
+/* light themes: the backdrop needs a touch more contrast against white cards */
+[data-ui-style][data-theme="light"] { --ui-backdrop: color-mix(in oklab, var(--muted) 85%, var(--border)); }
+[data-ui-style][data-theme="warm"] { --ui-backdrop: color-mix(in oklab, var(--secondary) 80%, var(--border)); --ui-surface: var(--card); }
+
+/* -- 2. literal utilities ------------------------------------------------- */
+[data-ui-style] .rounded { border-radius: var(--radius-md); }
+[data-ui-style] .text-\[11px\] { font-size: var(--ui-text-11); }
+[data-ui-style] .text-\[10px\] { font-size: var(--ui-text-10); }
+[data-ui-style] .text-\[9px\] { font-size: var(--ui-text-9); }
+/* ALL-CAPS tracked section labels → sentence-case semibold */
+[data-ui-style] .uppercase[class*="tracking-wide"][class*="text-[var(--muted-foreground)]"],
+[data-ui-style] [data-ui="bar"] button.uppercase {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+
+/* -- 3. panel layout ------------------------------------------------------ */
+[data-ui-style] body,
+[data-ui-style] [data-ui="shell"],
+[data-ui-style] [data-ui~="main"] { background: var(--ui-backdrop); }
+[data-ui-style] [data-ui="shell"] { padding: var(--ui-gap) var(--ui-gap) var(--ui-gap) 0; }
+/* maximized editor / bottom panel: same inset as the docked layout */
+[data-ui-style] [data-ui~="main"].fixed { padding: var(--ui-gap); }
+
+/* navigation sits on the backdrop: activity bar, sidebars, their headers */
+[data-ui-style] [data-ui="activity"] { background: var(--ui-backdrop); border-right-color: transparent; }
+[data-ui-style] [data-ui="activity"] > div > button[data-active],
+[data-ui-style] [data-ui="activity"] > button[data-active] { background: var(--ui-nav-active); }
+[data-ui-style] [data-ui="activity"] button { margin-inline: 4px; width: calc(100% - 8px); border-radius: var(--radius-lg); height: 2.75rem; }
+[data-ui-style] [data-ui="activity"] button[data-active] > div:first-child { display: none; }
+[data-ui-style] [data-ui="nav"],
+[data-ui-style] [data-ui="nav"] > div,
+[data-ui-style] [data-ui="nav"] [class*="bg-[var(--card)]"]:not([class*="shadow"]),
+[data-ui-style] [data-ui="nav"] [class*="bg-[var(--background)]"]:not(input):not([class*="shadow"]) { background: transparent; }
+[data-ui-style] [data-ui="nav"] [class*="border-b"] { border-bottom-color: transparent; }
+
+/* gaps instead of 1px divider lines (the grab area stays as wide) */
+[data-ui-style] [data-ui="gap"] { background: transparent; }
+[data-ui-style] [data-ui="gap"][data-panel-group-direction="horizontal"] { width: var(--ui-gap); }
+[data-ui-style] [data-ui="gap"][data-panel-group-direction="vertical"] { height: var(--ui-gap); }
+[data-ui-style] [data-ui="gap"]:hover,
+[data-ui-style] [data-ui="gap"][data-resize-handle-active] { background: color-mix(in oklab, var(--primary) 35%, transparent); }
+
+/* content = floating cards */
+[data-ui-style] [data-ui~="card"],
+[data-ui-style] [data-ui="dock"] > [data-ui="editor"],
+[data-ui-style] [data-ui="dock"] [data-ui="bottom"] {
+  border-radius: var(--ui-card-radius);
+  overflow: hidden;
+  background: var(--ui-surface);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--border) 60%, transparent), 0 1px 3px rgb(0 0 0 / 0.08);
+}
+[data-ui-style] [data-ui="dock"] > [data-ui="editor"] { height: 100%; }
+[data-ui-style] [data-ui="editor"],
+[data-ui-style] [data-ui="editor-body"] [class*="bg-[var(--background)]"] { background: var(--ui-surface); }
+
+/* bottom panel: its bar + the chat / session-list split become one card whose
+   session list is a tinted side column, no hard rules between them */
+[data-ui-style] [data-ui="bottom"] { background: var(--ui-surface); }
+[data-ui-style] [data-ui="bottom"] [data-ui="chat"] { background: var(--ui-surface); }
+[data-ui-style] [data-ui="bottom"] [data-ui="chat"] > [data-ui~="card"] { border-radius: 0; box-shadow: none; }
+[data-ui-style] [data-ui="side"] {
+  border-left-color: transparent;
+  background: color-mix(in oklab, var(--ui-backdrop) 45%, var(--ui-surface));
+}
+[data-ui-style] [data-ui="side"] > div:has(> span.truncate) { border-bottom-color: transparent; }
+
+/* title / tool bars: no rule under them, icon buttons lose their chrome */
+[data-ui-style] [data-ui="bar"],
+[data-ui-style] [data-ui="tabs"] { border-bottom-color: transparent; background: transparent; }
+[data-ui-style] [data-ui="bar"] button.rounded,
+[data-ui-style] [data-ui="tabs"] > button { border-color: transparent; background: transparent; }
+[data-ui-style] [data-ui="bar"] button[data-active] > div { display: none; }
+[data-ui-style] [data-ui="bar"] button[data-active] { background: var(--ui-nav-active); border-radius: var(--ui-pill); }
+[data-ui-style] [data-ui="bar"] button:not([data-active]) { border-radius: var(--ui-pill); }
+
+/* editor file tabs → pills on the bar */
+[data-ui-style] [data-ui="tabs"] { padding: 4px 6px; gap: 2px; }
+[data-ui-style] [data-ui="tabs"] [draggable] { border-right-color: transparent; border-radius: var(--ui-pill); }
+[data-ui-style] [data-ui="tabs"] [draggable][data-active] { background: var(--ui-nav-active); }
+
+/* selection = inset rounded block, not an edge-to-edge strip */
+[data-ui-style] [data-ui="nav"] button[data-path],
+[data-ui-style] [data-ui="nav"] button.flex.w-full { margin-inline: 6px; width: calc(100% - 12px); border-radius: var(--radius-md); }
+[data-ui-style] [data-ui="nav"] button[data-path][class*="bg-[var(--accent)]"] { background: var(--ui-nav-active); color: var(--foreground); }
+
+/* controls: inputs / search / composer / buttons → pill or large radius */
+/* only fully-rounded fields — a half-rounded one (quick-open's rounded-t-md
+   input over its list) keeps its shape */
+[data-ui-style] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):is(.rounded, .rounded-md, .rounded-lg),
+[data-ui-style] select:is(.rounded, .rounded-md, .rounded-lg) { border-radius: var(--ui-pill); }
+[data-ui-style] [data-ui="nav"] input { background: var(--ui-surface); }
+[data-ui-style] textarea { border-radius: var(--radius-lg); }
+
+/* floating chat / terminal window + overlays: follow the card radius */
+[data-ui-style] [data-ui="floating"],
+[data-ui-style] [data-ui="floating"] > div:first-child { border-radius: var(--ui-card-radius); }
+[data-ui-style] .shadow-lg.rounded-md,
+[data-ui-style] .shadow-lg.rounded,
+[data-ui-style] .shadow-lg.rounded-lg { border-radius: var(--radius-lg); padding-inline: 4px; }
+[data-ui-style] .shadow-lg.rounded-md > div > button,
+[data-ui-style] .shadow-lg.rounded-md > button,
+[data-ui-style] .shadow-lg.rounded-lg > button { border-radius: var(--radius-md); }
+
+/* soft only: roomier rows */
+[data-ui-style="soft"] [data-ui="nav"] button[data-path] { padding-block: 5px; }
+[data-ui-style="soft"] [aria-selected] { height: 2rem; }

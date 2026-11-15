@@ -125,7 +125,7 @@ export function ResizableSidebar({ openKey, widthKey, defaultWidth, title, child
 
   if (!open) {
     return (
-      <div {...hoverPeek?.bind} className={cn(
+      <div {...hoverPeek?.bind} data-ui="side" className={cn(
         'relative flex shrink-0 flex-col items-center border-l border-[var(--border)] bg-[var(--card)] pt-1',
         collapsedContent ? 'w-10' : 'w-6',
       )}>
@@ -157,7 +157,7 @@ export function ResizableSidebar({ openKey, widthKey, defaultWidth, title, child
   }
 
   return (
-    <div className="relative flex shrink-0 flex-col border-l border-[var(--border)] bg-[var(--card)]" style={{ width }}>
+    <div data-ui="side" className="relative flex shrink-0 flex-col border-l border-[var(--border)] bg-[var(--card)]" style={{ width }}>
       <div
         onPointerDown={startResize}
         title={t('sidebar.resize')}

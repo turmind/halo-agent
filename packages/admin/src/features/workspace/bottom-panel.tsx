@@ -154,10 +154,11 @@ export function BottomPanel({ floating = false, dragHandleRef }: BottomPanelProp
   }
 
   return (
-    <div className="flex h-full flex-col bg-[var(--background)]">
+    <div data-ui="bottom" className="flex h-full flex-col bg-[var(--background)]">
       {/* VS Code style tab bar */}
       <div
         ref={dragHandleRef}
+        data-ui="bar"
         className={cn(
           'relative flex h-[35px] shrink-0 items-center gap-0 border-b border-[var(--border)] bg-[var(--card)] px-2',
           floating && 'cursor-move select-none',
@@ -239,8 +240,9 @@ function TabButton({ label, active, onClick }: {
   return (
     <button
       onClick={onClick}
+      data-active={active || undefined}
       className={cn(
-        'relative px-3 py-2 text-[11px] font-medium tracking-wide transition-colors',
+        'relative px-3 py-2 text-[11px] font-medium uppercase tracking-wide transition-colors',
         active
           ? 'text-[var(--foreground)]'
           : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
