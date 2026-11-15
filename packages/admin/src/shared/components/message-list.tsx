@@ -177,7 +177,7 @@ const ExchangeRow = memo(function ExchangeRow({
 }: { user: ChatMessage; responses: ChatMessage[]; debugMode?: boolean; userOrdinal: number; deletable: boolean }) {
   const deleted = !!user.deleted
   return (
-    <div className={cn('border-b border-[var(--border)]/50 last:border-b-0', deleted && 'opacity-50')}>
+    <div data-ui="exchange" className={cn('border-b border-[var(--border)]/50 last:border-b-0', deleted && 'opacity-50')}>
       {user.role === 'user' ? (
         parseSubAgentReport(user.content) ? (
           <SubAgentReport content={user.content} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} />
@@ -699,7 +699,7 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
       {/* Client-only inline previews (e.g. desktop screen captures) — render
           straight from the data URL, click to zoom. */}
       {localImages && localImages.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-4 py-2 border-b border-[var(--border)]/30">
+        <div data-ui="attach" className="flex flex-wrap gap-2 px-4 py-2 border-b border-[var(--border)]/30">
           {localImages.map((src, i) => (
             <SafeImage
               key={i}
@@ -713,7 +713,7 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
         </div>
       )}
       {media.length > 0 && (
-        <div className="px-4 py-2 border-b border-[var(--border)]/30">
+        <div data-ui="attach" className="px-4 py-2 border-b border-[var(--border)]/30">
           <MediaAttachments media={media} />
         </div>
       )}

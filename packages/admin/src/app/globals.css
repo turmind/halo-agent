@@ -436,6 +436,10 @@ body {
   border-radius: var(--radius-lg);
   border-bottom-color: transparent;
 }
+/* the rules between turns (exchange) and under a message's attachment row
+   (attach) ran edge to edge past those inset cards: gaps instead */
+[data-ui-style] [data-ui="exchange"],
+[data-ui-style] [data-ui="attach"] { border-bottom-color: transparent; }
 
 /* soft only: roomier rows */
 [data-ui-style="soft"] [data-ui="nav"] button[data-path] { padding-block: 5px; }
