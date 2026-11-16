@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Admin: a chat code block's copy button stays at the block's top right when a long line is scrolled sideways, and on touch screens it is always shown (it was hover-only).
+- Admin (phone): "Add to Home Screen" on iOS shows the Halo icon instead of a letter "H" (new 180×180 `apple-touch-icon`).
+- Build: the cli bundle's export-name probe no longer loses its output on macOS (the child exited before its stdout pipe drained, so `JSON.parse` failed and the dmg build stopped).
+
 ## [2.3.4] - 2026-11-16
 
 - Desktop (Windows): upgrading over an older install no longer stops when the old uninstaller fails. The installer first kills every process running from the install dir, including orphaned `node.exe` and `OpenConsole.exe`, not just `node.exe`. If the old uninstaller still fails, the installer removes the old install dir (only when it holds `Halo.exe`) and finishes the upgrade, so you no longer have to delete that folder by hand. If a program outside the install dir is holding a file, the "Halo cannot be closed" box can still appear once; Retry and Cancel now both continue the upgrade.
