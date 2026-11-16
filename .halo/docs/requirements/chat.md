@@ -21,6 +21,7 @@ The primary surface for talking to an agent.
 
 ### Message rendering
 - Markdown + code-block highlighting
+- Each code block has a copy button at its top right: it appears on hover with a mouse and is always shown on touch screens. It stays in place when a long line is scrolled sideways.
 - A ` ```mermaid ` block is drawn as a diagram once the message has finished: while the reply streams it stays a plain code block (half a diagram is a parse error), and settled history messages render directly. Same renderer as the Markdown preview ([editor.md](editor.md#renderable-text-formats-markdown--html)): app-themed, strict security, and a diagram that fails to render stays as source with a small error line
 - **Clickable file paths**: inline code and markdown-link targets that look like a path open in the canvas on click (pointer cursor; plain prose is never scanned). Counts as a path: a relative path with a `/`, a bare name with an extension (1–10 chars, letter first: `CHANGELOG.md`), an absolute or `~/` path, a folder ending in `/`, Windows drive / backslash / UNC forms — each may end in `:line` or `:line:col` (a drive letter's colon is not a line). Not a path: anything with a space or `()=<>|;,*?`, `://`, a leading `-`, a version like `2.1.3` / `v2.1.2`. Existence is checked only on click (one `/fs/stat`):
   - a workspace file opens like a click in the file tree (an absolute path inside the workspace is matched to the same relative tab); `:line` jumps there, switching Markdown / HTML to source view
