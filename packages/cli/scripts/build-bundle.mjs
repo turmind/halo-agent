@@ -211,11 +211,13 @@ function pinOwnPackageJson({ pkgName, file, find, replace }) {
 // that file, read by import()ing it in a child node process. `default` is
 // `module.exports`, as in Node; the wrapper's require() shares the module's one
 // instance with any static importer. A probe that fails fails the build.
+// The probe exits in write()'s callback: pipe writes are async on POSIX, and
+// exiting right after write() truncated the ~92 KB JSON (8 KB on macOS). The
+// forced exit stays — an imported module may leave handles open.
 const execFileP = promisify(execFile)
 const NAMES_PROBE = `import { pathToFileURL } from 'node:url'
 const ns = await import(pathToFileURL(process.argv[1]).href)
-process.stdout.write(JSON.stringify(Object.keys(ns)))
-process.exit(0)`
+process.stdout.write(JSON.stringify(Object.keys(ns)), () => process.exit(0))`
 // The export names Node's import() gives a file, in a child node process —
 // at most one per core at a time (~30 probes per build, each a full module load).
 const PROBE_CONCURRENCY = os.availableParallelism()
