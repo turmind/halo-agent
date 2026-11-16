@@ -406,6 +406,9 @@ body {
    py-2 + an underline, sized to fill classic's 35px bar; as a pill that
    touches the card's top edge — inset like the editor's file-tab pills */
 [data-ui-style] [data-ui="bar"] > button:not(.rounded) { padding-block: 4px; }
+/* split view fills both pills; flush (gap-0, sized for classic's underline)
+   they read as one block */
+[data-ui-style] [data-ui="bar"] > button:not(.rounded) + button:not(.rounded) { margin-left: 4px; }
 
 /* editor file tabs → pills on the bar */
 [data-ui-style] [data-ui="tabs"] { padding: 4px 6px; gap: 2px; }
