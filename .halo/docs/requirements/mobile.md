@@ -32,6 +32,7 @@ One full-screen view at a time, with a top bar (title, back, actions) and a bott
 - **No focus zoom.** Text fields are 16px, so iOS Safari doesn't zoom in when one is focused. Rows are at least 40px tall, and the chat input's icon buttons are 40px.
 - **Keyboard.** The shell follows the visible viewport, so the chat input stays above the on-screen keyboard.
 - **Notch / home bar.** The shell keeps clear of the safe areas, and the page is laid out edge to edge (`viewport-fit=cover`).
+- **Home-screen icon.** "Add to Home Screen" uses the Halo icon: `app/apple-icon.png`, 180×180, rendered from `icon.svg` without the rounded corners, because iOS applies its own mask. There is no web app manifest; current iOS still opens the shortcut as a standalone web app (no Safari bars) by default.
 
 ## Not on the phone
 
