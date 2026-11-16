@@ -26,9 +26,7 @@
   FileClose $9
 !macroend
 
-; --- electron-builder hooks ------------------------------------------------
-
-; Override the default "app is running" check. The stock check (taskkill /im
+; Kill everything still running from $INSTDIR. The stock check (taskkill /im
 ; Halo.exe) kills only Halo.exe — but Halo spawns a child `node.exe` (the
 ; server, holding port 9527 + ~/.halo/global/server.lock). Closing the Halo
 ; window without a clean before-quit (or a crash) orphans that node.exe; it
@@ -38,16 +36,24 @@
 ; not-running process just no-ops, so this is safe to run unconditionally and
 ; avoids the stock check's modal-prompt-and-retry loop.
 ;
-; Second pass: an ALREADY-orphaned node.exe (its Halo.exe parent died without
+; Second pass: an ALREADY-orphaned process (its Halo.exe parent died without
 ; a clean quit — app.exit() paths in older builds, Task Manager "End process",
 ; Windows shutdown races) is unreachable by `/im Halo.exe /T`: the tree walk
-; starts from Halo.exe pids and there are none. That orphan still holds an
-; executable-image lock on $INSTDIR\resources\node.exe, so extraction hits
-; "file in use" retry prompts — the exact "still running even after I closed
-; it" report. Kill node processes whose image lives under $INSTDIR (matches
-; the bundled runtime only — a user's own system node.exe has a different
-; path). PowerShell is already a dependency of this installer (PATH helper
-; above). `$$_` is NSIS-escaping for a literal PowerShell `$_`.
+; starts from Halo.exe pids and there are none. That orphan still holds
+; locks inside $INSTDIR, so the upgrade hits "file in use" retry prompts — the
+; exact "still running even after I closed it" report. Kill EVERY process
+; whose image lives under $INSTDIR, not just node.exe: node-pty's
+; OpenConsole.exe (resources\*-runtime\node_modules\node-pty\prebuilds\…\
+; conpty\) outlives a killed server the same way, and so would any exe a
+; future dependency ships. A user's own processes (system node.exe, shells)
+; have images elsewhere and never match. PowerShell is already a dependency
+; of this installer (PATH helper above). `$$_` is NSIS-escaping for a literal
+; PowerShell `$_`.
+;
+; Our own pid is excluded: the old uninstaller normally runs from
+; $PLUGINSDIR (%TEMP%), but electron-builder falls back to running it in
+; place ($INSTDIR\Uninstall Halo.exe) when the temp copy can't launch, and
+; this macro runs inside the uninstaller too (un.onInit → CHECK_APP_RUNNING).
 ;
 ; Match on Win32_Process.ExecutablePath, NOT Get-Process .Path: the NSIS
 ; installer is a 32-bit process, so the `powershell` it launches is the 32-bit
@@ -59,11 +65,57 @@
 ; nsExec child), NOT spliced into the command: inside a PS '...' literal a `'`
 ; in the path ends the string, and `-like` reads `[` / `]` as wildcards. The
 ; match is a literal case-insensitive prefix test instead.
-!macro customCheckAppRunning
+!macro haloKillInstDirProcesses
   nsExec::Exec '"$SYSDIR\taskkill.exe" /im "${APP_EXECUTABLE_FILENAME}" /T /F'
   System::Call 'kernel32::SetEnvironmentVariable(t "HALO_INSTDIR", t "$INSTDIR")'
-  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'node.exe' -and $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith($$env:HALO_INSTDIR + '\', [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
+  System::Call 'kernel32::GetCurrentProcessId() i .r9'
+  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.ProcessId -ne $9 -and $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith($$env:HALO_INSTDIR + '\', [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
   Sleep 500   ; give the OS a moment to release the file locks before we overwrite
+!macroend
+
+; Upgrade fallback when the OLD version's uninstaller fails. electron-builder
+; runs it (`uninstallOldVersion`, 5 attempts) before extracting; its update-
+; mode atomicRMDir renames every file into %TEMP%, and a single file it can't
+; move — a lock held by something outside $INSTDIR (antivirus, indexer, an
+; editor), a path over MAX_PATH in an older build — aborts it with a non-zero
+; exit. Stock handling then shows "Halo cannot be closed" (Retry / Cancel),
+; and on Cancel "Failed to uninstall old application files" and QUITS — the
+; user is stuck on the old version with no way forward but deleting the
+; install dir by hand. Defining these hooks replaces that stock result check
+; (handleUninstallResult inserts the macro and returns before its own
+; IfErrors / $R0 test), so the failure test is ours: on any failure, kill
+; again, wipe $INSTDIR ourselves and carry on — extraction rewrites every
+; file. The Halo.exe guard keeps RMDir off a directory that isn't a Halo
+; install. User data lives in ~/.halo and %APPDATA%\Halo, never $INSTDIR.
+; The Retry / Cancel prompt itself sits inside uninstallOldVersion's loop with
+; no hook, so it still appears once; Cancel now continues instead of quitting.
+!macro haloUnInstallCheck
+  ${if} ${Errors}
+  ${orIf} $R0 != 0
+    DetailPrint `Old uninstaller failed (code $R0), removing "$INSTDIR" and continuing.`
+    !insertmacro haloKillInstDirProcesses
+    ${if} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+      RMDir /r $INSTDIR
+    ${endif}
+    ClearErrors
+  ${endif}
+!macroend
+
+; --- electron-builder hooks ------------------------------------------------
+
+; Override the default "app is running" check. Runs before the old
+; uninstaller (and inside the uninstaller's un.onInit), so clearing our own
+; processes here removes the main cause of the uninstall failure up front.
+!macro customCheckAppRunning
+  !insertmacro haloKillInstDirProcesses
+!macroend
+
+!macro customUnInstallCheck
+  !insertmacro haloUnInstallCheck
+!macroend
+
+!macro customUnInstallCheckCurrentUser
+  !insertmacro haloUnInstallCheck
 !macroend
 
 !macro customInstall
