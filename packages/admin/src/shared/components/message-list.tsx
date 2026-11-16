@@ -726,7 +726,26 @@ function UserExchangeHeader({ content, localImages, timestamp, userOrdinal, dele
   )
 }
 
-function ChatPre({ children }: { children?: React.ReactNode }) { return <pre className="overflow-x-auto">{children}</pre> }
+/** Code block + its copy button. The button sits outside the scrolling `<pre>`
+ *  so a long line scrolled sideways doesn't carry it away (inside, it did);
+ *  hover-only on a mouse, always shown on touch. Text comes off the hast
+ *  `pre > code` node — `children` is already the rendered `<code>`. */
+function ChatPre({ node, children }: React.ComponentProps<'pre'> & ExtraProps) {
+  const [copied, setCopied] = useState(false)
+  const code = node?.children[0]
+  const text = code?.type === 'element' ? code.children.map((c) => (c.type === 'text' ? c.value : '')).join('').replace(/\n$/, '') : ''
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
+  }
+  return (
+    <div className="relative group">
+      <pre className="overflow-x-auto">{children}</pre>
+      <button onClick={handleCopy} className="absolute top-1 right-1 rounded bg-[var(--secondary)] p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-[var(--accent)] transition-opacity">
+        {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+      </button>
+    </div>
+  )
+}
 
 /** Settled-message `pre`: a ```mermaid block becomes a diagram. Module-level
  *  (not inline in `components`) so its identity is stable — react-markdown uses
@@ -734,8 +753,8 @@ function ChatPre({ children }: { children?: React.ReactNode }) { return <pre cla
  *  already-settled message while a sibling in the same exchange streams. */
 function ChatPreMermaid({ node, children }: React.ComponentProps<'pre'> & ExtraProps) {
   const source = mermaidSource(node)
-  if (source === null) return <ChatPre>{children}</ChatPre>
-  return <MermaidBlock source={source} fallback={<ChatPre>{children}</ChatPre>} />
+  if (source === null) return <ChatPre node={node}>{children}</ChatPre>
+  return <MermaidBlock source={source} fallback={<ChatPre node={node}>{children}</ChatPre>} />
 }
 
 /** Markdown link target that is a path (`[x](C:\\a\\b.ts)`) passes as written —
@@ -1025,21 +1044,13 @@ function useCollapsible(maxLines: number, collapsedHeight = maxLines * 20) {
   }
 }
 
+/** Inside the `<pre>`: language label + code. The copy button is ChatPre's. */
 function ChatCodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
-  const [copied, setCopied] = useState(false)
-  const code = String(children).replace(/\n$/, '')
   const lang = className?.replace('language-', '') || ''
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
-  }
-
   return (
-    <div className="relative group">
+    <div>
       {lang && <span className="block mb-1 text-[9px] leading-none text-[var(--muted-foreground)] opacity-60">{lang}</span>}
-      <button onClick={handleCopy} className="absolute top-1 right-1 rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--accent)] transition-opacity">
-        {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-      </button>
       <code className={className}>{children}</code>
     </div>
   )
