@@ -79,6 +79,16 @@ win:
     - target: nsis
       arch: x64
   icon: resources/icon.ico
+  # Keep only the Chromium UI locales Halo targets (~49 MB of locales/*.pak
+  # otherwise). Chromium falls back to en-US when a locale's .pak is missing,
+  # and app.getLocale() / navigator.language follow it — zh-TW stays so
+  # zh-TW / zh-HK systems still get the Chinese UI (startsWith('zh') checks).
+  # Win-only on purpose: on mac the same option filters Resources/*.lproj,
+  # whose names (en, zh_CN) differ from these.
+  electronLanguages:
+    - en-US
+    - zh-CN
+    - zh-TW
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

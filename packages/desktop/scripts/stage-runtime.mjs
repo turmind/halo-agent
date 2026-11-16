@@ -262,6 +262,10 @@ trimNativeBloat()
 //     loop. Never loaded at runtime; drop them from both runtimes.
 pruneImageSnapshots()
 
+// 2e. Drop dev-only payload nothing loads at runtime (see pruneShipBloat).
+//     The cli-runtime admin-out copy goes later, after step 3 (win32 only).
+pruneShipBloat()
+
 // Resolve the real directories of an installed package. We deploy with
 // node-linker=hoisted (flat node_modules/<pkg>) on every target; the isolated
 // (.pnpm/<pkg>@<ver>/node_modules/<pkg>) branch is kept as a fallback so this
@@ -339,6 +343,107 @@ function pruneImageSnapshots() {
     }
   }
   console.log(`[stage] pruned ${pruned} @jimp src/__image_snapshots__ dirs (MAX_PATH hazard on Windows upgrade)`)
+}
+
+// Dev-only payload that `pnpm deploy` / `npm install` carry into both runtimes
+// but nothing loads at runtime: source maps + TypeScript declarations in
+// node_modules (the server's own dist/*.map stay — they're outside
+// node_modules), @types packages, node-pty's debug symbols (*.pdb) and its
+// non-target conpty copies under third_party/ (only its post-install script
+// reads those; the runtime loads prebuilds/<plat>/conpty/), the server's own
+// test/ + vitest.config.ts, and drizzle-orm dialects the server never imports.
+// Idempotent — called on the full and fast paths (fast reuses node_modules the
+// deps fingerprint doesn't re-check, same as pruneImageSnapshots).
+function pruneShipBloat() {
+  let files = 0
+  let bytes = 0
+  for (const rt of [SERVER_RT, CLI_RT]) {
+    const nm = path.join(rt, 'node_modules')
+    if (!fs.existsSync(nm)) continue
+    for (const rel of fs.readdirSync(nm, { recursive: true })) {
+      const p = path.join(nm, rel)
+      const base = path.basename(rel)
+      if (base === '@types' && path.basename(path.dirname(p)) === 'node_modules') {
+        fs.rmSync(p, { recursive: true, force: true })
+        continue
+      }
+      if (!/\.(?:[cm]?[jt]s|css)\.map$|\.d\.[cm]?ts$|\.pdb$/.test(base) || !fs.existsSync(p)) continue
+      const st = fs.lstatSync(p)
+      if (!st.isFile()) continue
+      fs.rmSync(p)
+      files++
+      bytes += st.size
+    }
+    const conpty = path.join(nm, 'node-pty', 'third_party', 'conpty')
+    if (fs.existsSync(conpty)) {
+      const keep = TARGET_PLATFORM === 'win32' ? `win10-${TARGET_ARCH}` : null
+      for (const ver of fs.readdirSync(conpty)) {
+        for (const arch of fs.readdirSync(path.join(conpty, ver))) {
+          if (arch !== keep) fs.rmSync(path.join(conpty, ver, arch), { recursive: true, force: true })
+        }
+      }
+    }
+  }
+  for (const sub of ['test', 'vitest.config.ts']) rmrf(path.join(SERVER_RT, sub))
+  pruneDrizzleDialects()
+  console.log(`[stage] pruned ${files} .map/.d.ts/.pdb files (${(bytes / 1048576).toFixed(1)} MiB) + @types, conpty extras, server test/`)
+}
+
+// drizzle-orm ships every dialect and ~30 drivers (pg, mysql, gel, singlestore,
+// neon, libsql, …); the server only uses the sqlite ones. Keep the top-level
+// dirs reachable by static import from the drizzle-orm specifiers server dist
+// actually imports, drop the rest. A closure, not a fixed keep-list: sql/sql.js
+// already reaches into pg-core, and a drizzle upgrade can add edges like that.
+// A reachable file that's missing (fast path after the server started importing
+// a newly-needed subpath) fails the stage instead of shipping a broken import.
+function pruneDrizzleDialects() {
+  const root = path.join(SERVER_RT, 'node_modules', 'drizzle-orm')
+  if (!fs.existsSync(root)) return
+  const exportsMap = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8')).exports
+  const specRe = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g
+  const queue = []
+  // Relative specifiers and drizzle-orm self-references (package exports →
+  // ESM entry); every other bare import is another package — not ours to walk.
+  const enqueue = (spec, fromFile) => {
+    if (spec.startsWith('.')) { if (fromFile) queue.push(path.resolve(path.dirname(fromFile), spec)); return }
+    if (spec !== 'drizzle-orm' && !spec.startsWith('drizzle-orm/')) return
+    const entry = exportsMap['.' + spec.slice('drizzle-orm'.length)]?.import?.default
+    if (!entry) { console.error(`[stage] FATAL: drizzle-orm has no ESM export for "${spec}"`); process.exit(1) }
+    queue.push(path.join(root, entry))
+  }
+  const distDir = path.join(SERVER_RT, 'dist')
+  for (const rel of fs.readdirSync(distDir, { recursive: true })) {
+    if (!rel.endsWith('.js')) continue
+    for (const [, spec] of fs.readFileSync(path.join(distDir, rel), 'utf-8').matchAll(specRe)) enqueue(spec, null)
+  }
+  const seen = new Set()
+  while (queue.length) {
+    const file = queue.pop()
+    if (seen.has(file)) continue
+    if (!fs.existsSync(file)) {
+      console.error(`[stage] FATAL: ${file} is imported but was pruned — run a full stage (HALO_STAGE_FULL=1)`)
+      process.exit(1)
+    }
+    seen.add(file)
+    for (const [, spec] of fs.readFileSync(file, 'utf-8').matchAll(specRe)) enqueue(spec, file)
+  }
+  const keep = new Set([...seen].map((f) => path.relative(root, f).split(path.sep)[0]))
+  for (const ent of fs.readdirSync(root, { withFileTypes: true })) {
+    if (ent.isDirectory() && !keep.has(ent.name)) fs.rmSync(path.join(root, ent.name), { recursive: true, force: true })
+  }
+  console.log(`[stage] drizzle-orm: kept ${[...keep].filter((k) => !k.includes('.')).sort().join(', ')}`)
+}
+
+// Windows only: drop cli-runtime's own admin-out copy. The desktop server
+// gets HALO_FRONTEND_DIR=resources/admin-out from main.cjs, and halo.cmd sets
+// the same for a `halo server start` from a terminal (build/installer.nsh), so
+// that copy is never read there. macOS keeps it: the /usr/local/bin/halo
+// launcher (main.cjs buildCliLauncher) sets no HALO_FRONTEND_DIR, so a
+// terminal-started server resolves <cli dist>/../admin-out.
+function pruneCliAdminOut() {
+  if (TARGET_PLATFORM !== 'win32') return
+  rmrf(path.join(CLI_RT, 'admin-out'))
+  console.log('[stage] removed cli-runtime/admin-out (win32: served from resources/admin-out)')
 }
 
 // Cross-arch / cross-platform fixup: when staging for an arch or OS that
@@ -566,6 +671,7 @@ function stageCliRuntime() {
 console.log('[stage] copying admin-out/')
 fs.cpSync(path.join(REPO_ROOT, 'packages', 'admin', 'out'), ADMIN_OUT_DST, { recursive: true })
 assertMonacoStaged(ADMIN_OUT_DST)
+pruneCliAdminOut()
 
 // 4. node binary (for the server child process). We bundle it because
 //    Electron's own ELECTRON_RUN_AS_NODE uses the embedded node 24, but
@@ -794,6 +900,9 @@ async function fastResync() {
   // before pruneImageSnapshots existed would still carry the MAX_PATH-hazard
   // PNGs (deps fingerprint doesn't cover this script). Idempotent, so re-run.
   pruneImageSnapshots()
+  pruneShipBloat()
+  // After the admin-out resync above, which just put cli-runtime's copy back.
+  pruneCliAdminOut()
 
   // Fast path reuses the prior stage's node_modules untouched — if that tree
   // carried a wrong-ABI better-sqlite3, fast would silently ship it. Smoke-test

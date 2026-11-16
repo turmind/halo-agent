@@ -122,8 +122,12 @@
   ; Launcher: bundled node.exe + the cli-runtime esbuild bundle. %~dp0 is the
   ; .cmd's own dir ($INSTDIR with trailing backslash), so the app stays
   ; relocatable. %* forwards all args (tui / cli "<prompt>" / setup / …).
+  ; HALO_FRONTEND_DIR: the Windows build ships no cli-runtime\admin-out (stage-
+  ; runtime.mjs pruneCliAdminOut), so `halo server start` serves the same
+  ; resources\admin-out the desktop app's server does.
   FileOpen $0 "$INSTDIR\halo.cmd" w
   FileWrite $0 "@echo off$\r$\n"
+  FileWrite $0 'if not defined HALO_FRONTEND_DIR set "HALO_FRONTEND_DIR=%~dp0resources\admin-out"$\r$\n'
   FileWrite $0 '"%~dp0resources\node.exe" "%~dp0resources\cli-runtime\bin\halo.js" %*$\r$\n'
   FileClose $0
 
