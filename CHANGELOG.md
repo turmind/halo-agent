@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Desktop (Windows): upgrading over an older install no longer stops when the old uninstaller fails. The installer first kills every process running from the install dir, including orphaned `node.exe` and `OpenConsole.exe`, not just `node.exe`. If the old uninstaller still fails, the installer removes the old install dir (only when it holds `Halo.exe`) and finishes the upgrade, so you no longer have to delete that folder by hand. If a program outside the install dir is holding a file, the "Halo cannot be closed" box can still appear once; Retry and Cancel now both continue the upgrade.
+- Desktop (Windows): smaller installer — 191 → 162 MB, installed size 700 → 544 MB, 18.8k → 9.1k files. The build drops debug symbols, source maps, type declarations, tests, unused drizzle dialects, the duplicate admin copy under `cli-runtime`, and Chromium locales other than en-US / zh-CN / zh-TW. `halo.cmd` points `HALO_FRONTEND_DIR` at the app's own admin.
+- Admin (modern / soft): the bottom panel's Chat / Terminal pills are centred in the bar, and in split view the two pills no longer run together.
+
 ## [2.3.3] - 2026-11-15
 
 - Admin: on a phone (narrower than 768px, or a phone in landscape) the admin switches to its own single-column layout — chat first, bottom nav (Chat / Files / Sessions / More), list → detail → back, settings in two levels; it remembers the last page and rotating doesn't reload a running canvas viewer.
