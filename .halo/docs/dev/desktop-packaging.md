@@ -231,7 +231,8 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
    2.3.3 → this trim on the Windows build: exe 190.9 → 161.7 MB, unpacked
    699.6 → 544.1 MB, 18,828 → 9,090 files, longest relative path 185 → 181.
 6. **Download + stage node** — fetch `node-$NODE_VERSION-<platform>-<arch>` from
-   nodejs.org, extract the `node` binary into `resources/`.
+   the npmmirror mirror (`$HALO_NODE_MIRROR` overrides; same path layout as
+   nodejs.org), extract the `node` binary into `resources/`.
 7. **codesign (ad-hoc)** — `codesign --force --sign -` on the node binary for
    Gatekeeper. **We deliberately do NOT `strip`** — see gotcha below.
 8. **Native-addon smoke test** — load the staged better-sqlite3 with the
