@@ -207,8 +207,29 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
    node regardless of the build host's node — see the ABI gotcha below);
    `@parcel/watcher`'s per-platform binary is swapped only when cross-staging.
 4. **Trim bloat** — drop non-target `node-pty` prebuilds, `better-sqlite3`'s
-   C source, and the server's `src/`/`tests/`.
-5. **Copy `admin-out/`** — the Next.js static export.
+   C source, and the server's `src/`/`tests/`. Then `pruneImageSnapshots()`
+   (jimp test PNGs, MAX_PATH gotcha below) and `pruneShipBloat()`, both
+   runtimes: `*.{js,cjs,mjs,ts,css}.map` + `*.d.{ts,cts,mts}` inside
+   `node_modules` (the server's own `dist/*.map` stay), every
+   `node_modules/@types`, node-pty's `*.pdb` and its non-target
+   `third_party/conpty/<ver>/<arch>` copies (only its post-install script reads
+   them; the runtime loads `prebuilds/<plat>/conpty/`), server `test/` +
+   `vitest.config.ts`, and every drizzle-orm top-level dir not reachable by
+   static import from the `drizzle-orm*` specifiers `server-runtime/dist`
+   imports (computed, not a keep-list: `sql/sql.js` already pulls in
+   `pg-core`; a reachable file that's gone fails the stage). Both prunes are
+   idempotent and run on the fast path too, since fast reuses `node_modules`
+   the deps fingerprint doesn't re-check.
+5. **Copy `admin-out/`** — the Next.js static export. Windows only: then
+   delete `cli-runtime/admin-out` (`pruneCliAdminOut`, also after the fast
+   path's resync). The desktop server gets `HALO_FRONTEND_DIR=resources/admin-out`
+   from `main.cjs`, and `halo.cmd` sets the same for a terminal `halo server
+   start`. macOS keeps the copy: its `/usr/local/bin/halo` launcher sets no
+   `HALO_FRONTEND_DIR`. electron-builder also keeps only `locales/{en-US,zh-CN,zh-TW}.pak`
+   (`win.electronLanguages`; Chromium falls back to en-US. Win-only because
+   on mac the option filters `*.lproj`, which are named `en` / `zh_CN`).
+   2.3.3 → this trim on the Windows build: exe 190.9 → 161.7 MB, unpacked
+   699.6 → 544.1 MB, 18,828 → 9,090 files, longest relative path 185 → 181.
 6. **Download + stage node** — fetch `node-$NODE_VERSION-<platform>-<arch>` from
    nodejs.org, extract the `node` binary into `resources/`.
 7. **codesign (ad-hoc)** — `codesign --force --sign -` on the node binary for
@@ -552,7 +573,34 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   — non-empty = this cause (append `| % { Stop-Process -Id $_.ProcessId
   -Force }` as the workaround, then Retry); empty = look at the MAX_PATH entry
   above. The fix ships in the new installer, and its check runs before the old
-  version's uninstaller, so upgrades from any older build benefit.
+  version's uninstaller, so upgrades from any older build benefit. Since 2.3.4
+  the second pass (macro `haloKillInstDirProcesses`) kills **every** process
+  whose image is under `$INSTDIR`, not just `node.exe` — node-pty's
+  `OpenConsole.exe` orphans the same way — skipping only its own pid (the
+  macro also runs inside the uninstaller, which electron-builder may launch in
+  place from `$INSTDIR`).
+
+- **Whatever the cause, a failed old uninstaller no longer strands the
+  upgrade (installer.nsh `customUnInstallCheck` /
+  `customUnInstallCheckCurrentUser`, since 2.3.4).** Stock electron-builder,
+  after `uninstallOldVersion` gives up (5 tries, then the "Halo cannot be
+  closed" Retry / Cancel box), shows "Failed to uninstall old application
+  files" and **quits**: the user stays on the old version until they delete the
+  install dir by hand. Defining those two hooks makes `handleUninstallResult`
+  skip its own `IfErrors` / `$R0` check, so ours runs instead: on failure it
+  kills again, `RMDir /r $INSTDIR` (only when `$INSTDIR\Halo.exe` exists) and
+  continues, and extraction writes the new tree. Nothing user-owned lives in
+  `$INSTDIR` (data: `~/.halo`, `%APPDATA%\Halo`). The Retry / Cancel box itself
+  is inside `uninstallOldVersion`'s loop with no hook, so a lock held by
+  something *outside* `$INSTDIR` (antivirus, indexer, an editor with a file
+  open) still shows it once in an interactive install; Retry and Cancel both
+  continue now, and `/S` takes Cancel silently. The hook is in the *new*
+  installer, so it covers upgrades from every older version. Wine repro (2.3.2
+  installed, a file in it held open with share mode 0 by a helper outside
+  `$INSTDIR`): the 2.3.3 installer exits 1 on "Failed to uninstall old
+  application files: 2"; the new one exits 0 with the new version's exact file
+  set. Wine has no PowerShell, so the CIM kill pass is untested there (the
+  `taskkill` pass and the fallback are).
 
 ## Verifying a build
 
