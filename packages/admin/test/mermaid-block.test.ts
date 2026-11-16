@@ -185,9 +185,11 @@ describe('chat messages', () => {
     mount(createElement(MessageList, { messages: [msg] }))
     await flush()
     const pre = host.querySelector('pre.overflow-x-auto')!
-    // ChatCodeBlock: language label + copy button + the code itself.
-    expect(pre.querySelector('div.group > span')?.textContent).toBe('ts')
-    expect(pre.querySelector('div.group > button')).not.toBeNull()
+    // ChatCodeBlock inside the pre: language label + the code itself. The copy
+    // button is ChatPre's, beside the pre (outside the sideways scroller).
+    expect(pre.querySelector('span')?.textContent).toBe('ts')
+    expect(pre.querySelector('button')).toBeNull()
+    expect(pre.closest('div.group')?.querySelector('div.group > button')).not.toBeNull()
     expect(pre.querySelector('code.language-ts')?.textContent).toBe('const a = 1\n')
     expect(mermaidMock.render).not.toHaveBeenCalled()
   })
