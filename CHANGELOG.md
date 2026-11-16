@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.3.5] - 2026-11-16
+
 - Admin: a chat code block's copy button stays at the block's top right when a long line is scrolled sideways, and on touch screens it is always shown (it was hover-only).
 - Admin (phone): "Add to Home Screen" on iOS shows the Halo icon instead of a letter "H" (new 180×180 `apple-touch-icon`).
 - Build: the cli bundle's export-name probe no longer loses its output on macOS (the child exited before its stdout pipe drained, so `JSON.parse` failed and the dmg build stopped).
@@ -1326,7 +1328,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.4...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.5...HEAD
+[2.3.5]: https://github.com/turmind/halo-agent/compare/v2.3.4...v2.3.5
 [2.3.4]: https://github.com/turmind/halo-agent/compare/v2.3.3...v2.3.4
 [2.3.3]: https://github.com/turmind/halo-agent/compare/v2.3.2...v2.3.3
 [2.3.2]: https://github.com/turmind/halo-agent/compare/v2.3.1...v2.3.2
