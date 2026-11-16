@@ -33,7 +33,7 @@ Call sites hardcode Tailwind classes (~600 of them), so the layer can't swap cla
 
 `data-active` is set only where the component already knows the row is selected (`isActive || undefined`); classic CSS never reads it.
 
-Remaining class-string selectors, each commented in place: `.uppercase[class*="tracking-wide"][class*="text-[var(--muted-foreground)]"]` (ALL-CAPS section labels → sentence case; a label pattern across ~20 call sites, not a container — a drifted label just stays ALL-CAPS), `[data-ui="bar"] button.rounded` (icon buttons in bars; `> button:not(.rounded)` = the bar's text tabs, bottom panel Chat / Terminal, inset to `padding-block: 4px` so their pill doesn't fill the 35px bar), and `input` / `select` `:is(.rounded, .rounded-md, .rounded-lg)` (only fully-rounded fields become pills).
+Remaining class-string selectors, each commented in place: `.uppercase[class*="tracking-wide"][class*="text-[var(--muted-foreground)]"]` (ALL-CAPS section labels → sentence case; a label pattern across ~20 call sites, not a container — a drifted label just stays ALL-CAPS), `[data-ui="bar"] button.rounded` (icon buttons in bars; `> button:not(.rounded)` = the bar's text tabs, bottom panel Chat / Terminal, inset to `padding-block: 4px` so their pill doesn't fill the 35px bar, and 4px apart so split view's two filled pills don't merge), and `input` / `select` `:is(.rounded, .rounded-md, .rounded-lg)` (only fully-rounded fields become pills).
 
 Not styleable: `confirmAction()` uses the native `window.confirm` (or the desktop shell's `haloConfirm`), so that one dialog keeps the OS look in every style.
 
