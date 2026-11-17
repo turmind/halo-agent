@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, afterAll } from 'vitest'
 import { createRequire } from 'node:module'
 import type { WebSocket } from 'ws'
 import type * as headlessTypes from '@xterm/headless'
+import type * as ptyTypes from 'node-pty'
 import { TerminalManager } from '../src/ws/terminal-manager.js'
 
 /**
@@ -82,11 +83,27 @@ async function waitFor(cond: () => boolean, what: string, timeoutMs = 15_000): P
   }
 }
 
+// close() only SIGHUPs the shell; bash then saves ~/.bash_history — the
+// scratch HOME setup-home.ts removes in afterAll — on its way out. Not waiting
+// let the last test's shell write while rmSync walked HOME (CI: ENOTEMPTY).
+// The manager keeps its PTYs private, so wrap node-pty's spawn (the same
+// module instance terminal-manager requires) to collect each one's real exit.
+const ptyModule = requireHere('node-pty') as { spawn: typeof ptyTypes.spawn }
+const realSpawn = ptyModule.spawn
+const ptyExits: Array<Promise<void>> = []
+ptyModule.spawn = (...args) => {
+  const p = realSpawn(...args)
+  ptyExits.push(new Promise((resolve) => { p.onExit(() => resolve()) }))
+  return p
+}
+afterAll(() => { ptyModule.spawn = realSpawn })
+
 const cleanups: Array<() => void> = []
-afterEach(() => {
+afterEach(async () => {
   for (const fn of cleanups.splice(0)) {
     try { fn() } catch { /* pty already gone */ }
   }
+  await Promise.all(ptyExits.splice(0))
 })
 
 /** A manager per fake connection, detached (subscription dropped) after the test. */
