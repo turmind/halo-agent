@@ -8,6 +8,7 @@ import { createInvocation, findInvocation, getInvocation, invocationBody, type I
 import { notifyInFlight } from '../src/a2a/agentcore-notify.js'
 import { createA2ADb, setA2ADb, getA2ADb, A2A_MIGRATIONS } from '../src/db/a2a-db.js'
 import { agentSessions } from '../src/db/schema.js'
+import { loadRawMessages } from '../src/sessions/session-store.js'
 import { readReplyTo, writeReplyTo } from '../src/agents/relay.js'
 import { sweepInterruptedRuns } from '../src/agents/run-ledger.js'
 import { createRunsDb, setRunsDb, insertRunning } from '../src/db/runs-db.js'
@@ -442,9 +443,13 @@ describe('POST /invocations — response modes (CONTRACT §1d)', () => {
   it('stored at finish, not re-derived: a later turn on the same fixed session leaves the earlier job\'s result alone', async () => {
     seedSession('job-fixed')
     await send(app(), { prompt: 'run 1', session: 'job-fixed', id: 'r1' })
-    // The turn end released the in-memory session; put the stub back.
+    // The turn end released the in-memory session; put the stub back, history
+    // reloaded the way ensureSession restores it (primed: the release dropped
+    // the raw baseline).
     sm.getDb().delete(agentSessions).run()
     seedSession('job-fixed')
+    const live = (sm as unknown as { sessions: Map<string, { agent: { messages: unknown[] } }> }).sessions.get('job-fixed')!
+    live.agent.messages = loadRawMessages('job-fixed', 'default', ws, { prime: true })
     await send(app(), { prompt: 'run 2', session: 'job-fixed', id: 'r2' })
     expect(((await (await getBody(app(), 'r1')).json()) as { result: string }).result).toMatch(/^done: 1/)
     expect(((await (await getBody(app(), 'r2')).json()) as { result: string }).result).toMatch(/^done: 2/)

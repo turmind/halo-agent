@@ -498,7 +498,7 @@ describe('5b. a turn with tool calls, then the next turn: raw is only ever appen
   // next turn's ack (sendUserMessage's repair). Both turns go through
   // sendUserMessage, the second from a reload (ensureSession → loadAgentState,
   // primed), the way a user's next message after release arrives.
-  it.each(['in memory', 'reloaded'] as const)('same inode across turn end, release and the next turn (%s)', async (mode) => {
+  it('same inode across turn end, release and the next turn', async () => {
     seedRow(sm, 'n1')
     const tool: ToolDef = { name: 'step', description: 't', inputSchema: { type: 'object', properties: {} }, callback: async () => 'ok' }
     const loop = new StepLoop([toolTurn(['t1'], 'step'), endTurn('one'), toolTurn(['t2'], 'step'), endTurn('two')], [tool])
@@ -512,9 +512,9 @@ describe('5b. a turn with tool calls, then the next turn: raw is only ever appen
     const fd = fs.openSync(file, 'r')
     const ino = fs.fstatSync(fd).ino
 
-    // Released at run end. Put the session back — as is, or with its history
-    // reloaded from disk the way ensureSession seeds it.
-    if (mode === 'reloaded') loop.messages = loadRawMessages('n1', 'default', ws, { prime: true }) as typeof loop.messages
+    // Released at run end (the raw baseline goes with it). Put the session
+    // back with its history reloaded from disk the way ensureSession seeds it.
+    loop.messages = loadRawMessages('n1', 'default', ws, { prime: true }) as typeof loop.messages
     ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('n1', s)
     expect(await sm.sendUserMessage('n1', 'second')).toBe('running')
     await settled()
@@ -608,10 +608,13 @@ describe('6. deleteExchange: raw must agree, or nothing changes', () => {
  */
 describe('7. a foreign write on either log rewrites both from memory', () => {
   /** A finished turn, the session kept in memory (as /context or a query
-   *  target would), both files written by this process. */
+   *  target would), both files written by this process. Run end released it,
+   *  so it comes back the way ensureSession restores it: history reloaded
+   *  from disk, primed. */
   async function idleWithHistory(id: string, parentId: string | null = null) {
     const s = fakeSession(sm, id, new StepLoop([endTurn('one')]), parentId)
     await sm.runSession(id, 'first')
+    s.agent.messages = loadRawMessages(id, 'default', ws, { prime: true }) as typeof s.agent.messages
     ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, s)
     return s
   }

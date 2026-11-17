@@ -204,7 +204,10 @@ describe('deleteExchange by stamp — live session', () => {
       const b = sm.appendUserMessage(id, 'B')
       await sm.sendUserMessage(id, 'B', undefined, undefined, b)
       await settle((sm as unknown as { sessions: Map<string, { promise: Promise<string> | null }> }).sessions.get(id)!)
-      fakeSession(id, agent)  // released at run end — re-register live
+      // Released at run end — re-register live, history reloaded the way
+      // ensureSession restores it (primed: the release dropped the baseline).
+      agent.messages = loadRawMessages(id, 'default', ws, { prime: true }) as typeof agent.messages
+      fakeSession(id, agent)
       expect(agent.messages).toHaveLength(2)
       expect(agent.messages[0].content.map((x) => x.text)).toEqual([`[${a}] A`, `[${b}] B`])
 

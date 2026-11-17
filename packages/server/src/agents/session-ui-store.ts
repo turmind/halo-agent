@@ -252,8 +252,14 @@ export class SessionUIStore {
         this.archiveOldMessages(id)
       }
       // The sub's turn ended and its log just landed whole; the next
-      // query_session rebuilds the log from that file (loadSubHistory).
-      if (taskId && event.type === 'agent_done') state.subSessionLogs.delete(taskId)
+      // query_session rebuilds the log from that file (loadSubHistory). Its
+      // writer baseline and agentId entry go with it, as in dropUIState —
+      // loadSubHistory re-primes both, and no check reads a sub's UI baseline
+      // while its log is out of memory.
+      if (taskId && event.type === 'agent_done' && state.subSessionLogs.delete(taskId)) {
+        forgetUILogCache(this.uiLogFile(rootId, taskId))
+        this.agentIdCache.delete(taskId)
+      }
     } catch (err) {
       console.error(`[SessionUIStore] reduceIntoUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -611,8 +617,13 @@ export class SessionUIStore {
     if (state) {
       // The logs' writer baselines go with them, or the cache grows with every
       // session ever loaded; the next ensureUIState / loadSubHistory re-primes.
-      // Raw baselines stay: the AgentSession may outlive this state.
-      for (const id of [sessionId, ...state.subSessionLogs.keys()]) forgetUILogCache(this.uiLogFile(sessionId, id))
+      // Raw baselines stay: the AgentSession may outlive this state. The
+      // agentId entries too (after uiLogFile, which reads them): re-resolved
+      // on the next load.
+      for (const id of [sessionId, ...state.subSessionLogs.keys()]) {
+        forgetUILogCache(this.uiLogFile(sessionId, id))
+        this.agentIdCache.delete(id)
+      }
     }
     this.uiStates.delete(sessionId)
     this.uiStateProjectPaths.delete(sessionId)

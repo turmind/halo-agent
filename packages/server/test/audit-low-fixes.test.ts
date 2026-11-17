@@ -85,11 +85,11 @@ describe('SessionUIStore.purge evicts the agentId cache (A-L1)', () => {
       refreshStaleHistory: () => {},
     })
 
-    // Drive a sub-session write: agent_start seeds the sub-log, agent_done
-    // persists it — which resolves (and caches) the taskId's agentId. The
-    // root's is cached too: ensureUIState resolves it to pick the row's db.
+    // A sub still running when its tree is deleted: agent_start seeds the
+    // sub-log, which resolves (and caches) the taskId's agentId (agent_done
+    // would drop it with the sub-log). The root's is cached too:
+    // ensureUIState resolves it to pick the row's db.
     store.emitEvent('root', { type: 'agent_start', agentName: 'sub', agentId: 'a', text: 't', taskId: 'root>child', sessionId: 'root>child' } as never)
-    store.emitEvent('root', { type: 'agent_done', agentName: 'sub', taskId: 'root>child' } as never)
     expect(cacheSize(store)).toBe(2)
 
     // deleteSessionTree purges every id in the tree, root and descendants alike.

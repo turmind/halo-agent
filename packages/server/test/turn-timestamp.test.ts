@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
+import { loadRawMessages } from '../src/sessions/session-store.js'
 
 /**
  * Every user-role turn the model sees carries its arrival time.
@@ -183,7 +184,10 @@ describe('runAgentTurn stamps the arrival time on every user-role turn', () => {
     const stamp = sm.appendUserMessage('t6', 'first')
     await sm.runSession('t6', 'first', stamp)
     // runSession's finally released the session (promise null → deleteExchange
-    // sees it idle); re-register the live session so the raw delete hits memory.
+    // sees it idle); re-register the live session so the raw delete hits memory,
+    // history reloaded the way ensureSession restores it (primed: the release
+    // dropped the raw baseline).
+    agent.messages = loadRawMessages('t6', 'default', ws, { prime: true }) as typeof agent.messages
     fakeSession('t6', agent)
 
     const ui = sm.getUIState('t6')!.messageLog.filter((m) => m.role === 'user')

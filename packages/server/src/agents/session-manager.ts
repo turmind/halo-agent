@@ -950,6 +950,10 @@ export class SessionManager implements SessionManagerInternals {
     this.uiStore.flushSession(sessionId)
     this.saveAgentState(session)
     this.stateStore.forgetRowWrites(sessionId)
+    // The raw writer baseline leaves with the history it describes: only an
+    // in-memory session is ever checked or written against it, and
+    // ensureSession's loadAgentState re-primes it on the next load.
+    forgetRawLogCache(rawLogPath(this.sessionDir(session.agentId), fileSegment(sessionId)))
     this.sessions.delete(sessionId)
     console.debug(`[SessionManager] Released session ${sessionId}`)
     // Deliberately NOT dropping the root's UIState here. Turn end is the wrong
