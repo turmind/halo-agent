@@ -53,26 +53,27 @@ Nginx is **not required**. Use it only for domain routing, SSL termination, or w
 - pnpm 11 — source builds only (pinned by the root `packageManager`; `corepack enable` picks it up)
 - AWS credentials — optional, only for the Bedrock providers (`~/.aws/credentials`, env vars, or an instance role)
 - bubblewrap (Linux) — needed for the `workspace` / `readonly` access levels: `sudo apt install bubblewrap`; on Ubuntu 23.10+ / 24.04 also the [AppArmor profile](#bubblewrap-on-ubuntu-2310-and-2404-apparmor)
-- RAM — 1 GB recommended; a 0.5 GB box only with a 1 GB swap file persisted in `/etc/fstab` ([Memory and swap](#memory-and-swap)). Disk: about 87 MB for the install, plus about 31 MB of npm cache
+- RAM — 1 GB recommended; below that (a 0.5 GB box) only with a 1 GB swap file persisted in `/etc/fstab`, created before installing Node ([Memory and swap](#memory-and-swap)). Disk: about 87 MB for the install, plus about 31 MB of npm cache
 
 ### Memory and swap
 
-Measured on Halo 2.2.5, fresh Ubuntu 24.04 arm64 EC2 (t4g.nano 0.5 GB, t4g.micro 1 GB), 2026-11:
+Measured on Halo 2.3.5, fresh Ubuntu 24.04 arm64 EC2 t4g.nano (0.5 GB), 2026-11-17:
 
 | What | RAM |
 |---|---|
-| `npm install -g @turmind/halo` | peak ≈ 540 MB (dependency resolution) |
-| Server, idle | ≈ 160 MB (≈ 250 MB for a few seconds at startup) |
-| Server, typical use (admin, editor, terminal, two parallel sub-sessions) | ≈ 210 MB |
-| Each `halo` CLI call (`--version`, `server status`, the `server start -d` launcher) | ≈ 170 MB more while it runs |
+| Stock EC2 Ubuntu 24.04 before Halo (SSM agent, GuardDuty agent, snapd …) | ≈ 245 MB used |
+| `npm install -g @turmind/halo` | peak ≈ 110 MB (≈ 120 MB with swap) |
+| Server, idle | ≈ 65 MB after the first minute (≈ 90 MB peak at startup) |
+| Server, typical use (admin, editor, terminal, two parallel sub-sessions) | ≈ 100–115 MB |
+| Each `halo` CLI call (`--version`, `server status`) | ≈ 40–60 MB more while it runs |
 | Local speech-to-text (voice input, meeting recorder extensions), while in use | ≈ 400 MB more in the extension's own backend process, ≈ 100–160 MB more with speaker labels; back to 0 five minutes after the last use (Halo ≥ 2.3.0 — before, it stayed in the server until restart). Each of the two extensions has its own process ([stt-local.md](../design/stt-local.md#engine)) |
 
 Agent `shell_exec` work (builds, scripts) comes on top of these.
 
-Since dependencies are bundled (after 2.2.6) these are upper bounds; the arm64 table hasn't been re-measured. Same method before / after on an x86_64 box: `npm install -g` peak 596 → 262 MB, server idle (5 min) 133 → 95 MB, a `halo --version` call 195 → 49 MB. 2.2.7 → 2.3.0 (sherpa-onnx out of the install), same box and method: install 119 → 87 MB on disk, npm cache 43 → 31 MB, server idle unchanged (at 5 min 96.5 / 98.6 MB for 2.2.7 and 100.0 / 98.2 MB for 2.3.0 over two runs each — run-to-run noise; sherpa-onnx was only loaded on first use).
+Halo 2.2.5 on the same box, before the dependencies were bundled (2.2.6) and sherpa-onnx left the install (2.3.0): install peak ≈ 540 MB, idle ≈ 160 MB, typical use ≈ 210 MB, each CLI call ≈ 170 MB. Same method before / after on an x86_64 box: `npm install -g` peak 596 → 262 MB, server idle (5 min) 133 → 95 MB, a `halo --version` call 195 → 49 MB. 2.2.7 → 2.3.0 (sherpa-onnx out of the install), same box and method: install 119 → 87 MB on disk, npm cache 43 → 31 MB, server idle unchanged (at 5 min 96.5 / 98.6 MB for 2.2.7 and 100.0 / 98.2 MB for 2.3.0 over two runs each — run-to-run noise; sherpa-onnx was only loaded on first use).
 
-- **1 GB (t4g.micro)**: the recommended minimum. Install and typical use passed with no swap and at least 390 MB still available. With local speech-to-text, add swap or use 2 GB (it needs ≈ 400–570 MB only while dictating / recording, and gives it back when idle).
-- **0.5 GB (t4g.nano)**: only with a 1 GB swap file. Without it, `apt-get install nodejs` and `npm install -g` are OOM-killed, and an installed server is killed by any ~60 MB transient (a `halo` CLI call, the SSM agent's document worker). With swap everything ran at micro's speed, except the first page load / editor open after idle (+0.7–1 s). Fit for a single-user trial, not a deployment.
+- **1 GB (t4g.micro)**: the recommended minimum. On 2.2.5 (heavier than today) install and typical use passed with no swap and at least 390 MB still available. With local speech-to-text, add swap or use 2 GB (it needs ≈ 400–570 MB only while dictating / recording, and gives it back when idle).
+- **0.5 GB (t4g.nano)**: only with a 1 GB swap file, created **before** installing Node. Halo itself fits — 2.3.5 installs, idles and runs the typical flow without swap — but the box around it doesn't: `apt-get install nodejs` is OOM-killed while unpacking (`dpkg-deb … killed by signal`, exit 100), and Ubuntu's `fwupd-refresh.timer` (enabled by default, hourly with up to 1 h random delay) grows `fwupd` to ≈ 150 MB, thrashes the box for minutes and the kernel kills the Halo server (the systemd unit restarts it). With the swap the same refresh finishes in ~10 s with no kill, and the typical flow runs at the same speed as without. Fit for a single-user trial, not a deployment.
 - CPU is not the limit: idle is ≈ 0.03 % of one vCPU; startup costs 3–4 s of CPU once.
 
 ```bash

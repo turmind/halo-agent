@@ -19,7 +19,17 @@ https://github.com/user-attachments/assets/45f86359-2d83-4c61-b937-0747b184340e
 
 ## 安装
 
-Halo 支持 Linux（x64 / arm64）、macOS 和 Windows，需要 **Node.js 22+**。Ubuntu 24.04 自带的 `nodejs` 是 18，跑不起来（`halo` 会拒绝启动），所以先装 22：
+Halo 支持 Linux（x64 / arm64）、macOS 和 Windows，需要 **Node.js 22+**。
+
+**机器配置**：推荐 1 GB 及以上内存（如 t4g.micro / t3.micro），CPU 不是瓶颈。Halo 本身很轻：server 空闲不到 100 MB，单人轻度使用约 110 MB，安装占磁盘约 87 MB。**内存低于 1 GB**（如 0.5 GB 的 t4g.nano）时，要在**装任何东西之前**先加 1 GB swap：没有 swap 时，下面的 `apt-get install nodejs` 会被 OOM 杀掉；装好之后，系统自带的定时任务（Ubuntu 的 `fwupd-refresh`）也会把内存耗尽，内核随之杀掉 server。加了 swap，0.5 GB 的机器单人试用没问题（[实测数据](.halo/docs/dev/deploy.md#memory-and-swap)）：
+
+```bash
+sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # 重启后 swap 仍然生效
+```
+
+Ubuntu 24.04 自带的 `nodejs` 是 18，跑不起来（`halo` 会拒绝启动），所以先装 22：
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs   # Ubuntu / Debian
@@ -35,11 +45,11 @@ halo server start              # → 打开 http://localhost:9527
 
 任意一家模型 key 就能跑 —— Anthropic、OpenAI（或任何 OpenAI 兼容端点）、Gemini、DeepSeek、Kimi、Qwen……**不需要** AWS 账号，Bedrock 只是[其中一个 provider](#模型)（而且可以不填 key，直接走 AWS 凭证链）。
 
-- **内存**：推荐至少 1 GB 内存 —— server 空闲时约 95 MB，但 `npm install -g` 峰值约 262 MB（x86_64 上实测）。0.5 GB 的机器（如 t4g.nano）必须加 1 GB swap 文件并写进 `/etc/fstab`，否则安装会被 OOM 杀掉，装好后 server 也会被杀（见 [deploy.md](.halo/docs/dev/deploy.md#memory-and-swap)）。本机语音转文字（语音输入、会议录音）使用时在扩展自己的进程里多占约 400 MB，闲置 5 分钟后释放。安装占磁盘约 87 MB。
+- **用本机语音转文字时的内存**：语音输入、会议录音使用时，在扩展自己的进程里多占约 400 MB，闲置 5 分钟后释放。1 GB 的机器要用它们，就加 swap 或换 2 GB。各步骤的实测数字见 [deploy.md](.halo/docs/dev/deploy.md#memory-and-swap)。
 - **`sudo`**：系统级 Node（apt / NodeSource 装的）执行 `npm install -g` 要加 `sudo`；用 nvm / fnm 则不用。
-- **`halo setup` 里**：问到 *Configure model provider keys now?* 时选 **Configure…**（默认项）。选好 provider、粘贴 key，再选 **── Done**（列表最后一项，按 ↑ 可以直接绕到它），最后在 *Switch default agent to …* 上回车。
+- **`halo setup` 里**：问到 *Configure model provider keys now?* 时选 **Configure…**（默认项）。选好 provider、粘贴 key，再选 **── Done**（列表最后一项，按 ↑ 可以直接绕到它），最后在 *Switch default agent to …* 上回车（只有给 Bedrock 以外的 provider 填了 key 才会出现这一步）。Bedrock 走 AWS 凭证链（实例角色、`~/.aws`）时没有 key 要填，直接选 **── Done**。
 - **远程主机上**：用 `halo server start -d`（不加 `-d` 会留在前台，SSH 一断就退出；在带 systemd 的 Linux 上，`-d` 会装成开机自启的用户服务），再用 `ssh -L 9527:localhost:9527 user@host` 建隧道，在本机打开 `http://localhost:9527`。不要在安全组里放开 9527 —— 见[现状与局限](#现状与局限)。
-- **Linux 沙箱**：`workspace` / `readonly` 访问级别需要 `sudo apt install bubblewrap`，Ubuntu 23.10+ / 24.04 还要加上 [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)。缺了它，server 启动时会给出警告和修法，`/api/health` 显示 `sandbox: null`，非 full 会话无法执行 shell。
+- **Linux 沙箱**：`workspace` / `readonly` 访问级别需要 `sudo apt-get install -y bubblewrap`，Ubuntu 23.10+ / 24.04 还要加上 [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor)。缺了它，server 启动时会给出警告和修法，`/api/health` 显示 `sandbox: null`，非 full 会话无法执行 shell。
 - **升级**：`halo upgrade && halo server restart`。由 systemd 托管的 server 会通过 `systemctl` 重启；system unit（见 [deploy.md Option C](.halo/docs/dev/deploy.md#option-c-systemd-for-the-npm-install)）可能需要 `sudo systemctl restart halo`。内置文档、Agent 和技能会在下次启动时自动刷新。
 - **Docker / CI**：`halo setup --non-interactive`，同时设好 `HALO_DEFAULT_PROVIDER=deepseek` 和 `DEEPSEEK_API_KEY`，就会绑定内置 Agent，并把 key 的占位符 `<<DEEPSEEK_API_KEY>>`（不是 key 本身）写进 `~/.halo/secrets/settings.yaml`；server 运行时也要设着这个变量（见 [deploy.md](.halo/docs/dev/deploy.md#non-interactive-docker--ci-details)）。`HALO_PASSWORD` 只是*管理台*密码。
 - **源码构建**：`pnpm install && pnpm build`（pnpm 11）。

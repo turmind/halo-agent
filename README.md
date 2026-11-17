@@ -19,7 +19,17 @@ https://github.com/user-attachments/assets/45f86359-2d83-4c61-b937-0747b184340e
 
 ## Install
 
-Halo runs on Linux (x64 / arm64), macOS and Windows, and needs **Node.js 22+**. Ubuntu 24.04's own `nodejs` package is 18 and won't work (`halo` refuses to start on it), so get 22 first:
+Halo runs on Linux (x64 / arm64), macOS and Windows, and needs **Node.js 22+**.
+
+**Machine size**: 1 GB of RAM or more is recommended (e.g. t4g.micro / t3.micro); CPU is not the limit. Halo itself is small — the server idles under 100 MB, uses about 110 MB in light single-user use, and the install takes about 87 MB of disk. **Below 1 GB** (a 0.5 GB box such as t4g.nano), add a 1 GB swap file **before installing anything**: without it the `apt-get install nodejs` below is OOM-killed, and later a stock system job (Ubuntu's `fwupd-refresh`) runs the box out of memory and the kernel kills the server. With swap a 0.5 GB box is fine for a single-user trial ([measurements](.halo/docs/dev/deploy.md#memory-and-swap)):
+
+```bash
+sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # keeps the swap after a reboot
+```
+
+Ubuntu 24.04's own `nodejs` package is 18 and won't work (`halo` refuses to start on it), so get 22 first:
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs   # Ubuntu / Debian
@@ -35,12 +45,12 @@ halo server start              # → open http://localhost:9527
 
 Bring any one model key — Anthropic, OpenAI (or any OpenAI-compatible endpoint), Gemini, DeepSeek, Kimi, Qwen… An AWS account is **not** required; Bedrock is just one of the [providers](#models) (and can use your AWS credential chain instead of a key).
 
-- **Memory**: 1 GB of RAM is the recommended minimum — the server idles at about 95 MB, but `npm install -g` peaks at about 262 MB (measured on x86_64). A 0.5 GB box (e.g. t4g.nano) needs a 1 GB swap file persisted in `/etc/fstab`, or the install and later the server get OOM-killed ([deploy.md](.halo/docs/dev/deploy.md#memory-and-swap)). Local speech-to-text (voice input, meeting recorder) adds about 400 MB while in use, in the extension's own process, and gives it back after 5 idle minutes. The install takes about 87 MB of disk.
+- **Memory with local speech-to-text**: voice input / meeting recorder add about 400 MB while in use, in the extension's own process, and give it back after 5 idle minutes — on a 1 GB box add swap or use 2 GB if you use them. Per-step numbers: [deploy.md](.halo/docs/dev/deploy.md#memory-and-swap).
 - **`sudo`**: with a system-wide Node (apt / NodeSource), `npm install -g` needs `sudo`; with nvm / fnm it doesn't.
 - **`gyp ERR! … not found: make` during install**: npm couldn't download better-sqlite3's prebuilt binary from GitHub (it then says `No prebuilt binaries found`, even though one exists) and fell back to compiling. Retry later, or install a compiler and rerun: `sudo apt-get install -y build-essential` (macOS: `xcode-select --install`).
-- **In `halo setup`**: at *Configure model provider keys now?* pick **Configure…** (the default). Pick your provider, then **Set explicit value** (the highlighted row is *Skip (leave unset)*) and paste the key; choose **── Done** (the last row; ↑ wraps to it), then press Enter on *Switch default agent to …*.
+- **In `halo setup`**: at *Configure model provider keys now?* pick **Configure…** (the default). Pick your provider, then **Set explicit value** (the highlighted row is *Skip (leave unset)*) and paste the key; choose **── Done** (the last row; ↑ wraps to it), then press Enter on *Switch default agent to …* (shown only when you set a key for a provider other than Bedrock). Bedrock on the AWS credential chain (instance role, `~/.aws`) has no key to paste: choose **── Done** right away.
 - **On a remote box**: run `halo server start -d` (plain `start` stays in the foreground and dies with your SSH session; on Linux with systemd, `-d` installs a user service that starts at boot), tunnel with `ssh -L 9527:localhost:9527 user@host`, and open `http://localhost:9527` on your machine. Don't open 9527 in a security group — see [Status & Limitations](#status--limitations).
-- **Linux sandbox**: the `workspace` / `readonly` access levels need `sudo apt install bubblewrap`, and on Ubuntu 23.10+ / 24.04 also an [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor). Without it the server warns at startup with the fix, `/api/health` shows `sandbox: null`, and non-full sessions can't run shell.
+- **Linux sandbox**: the `workspace` / `readonly` access levels need `sudo apt-get install -y bubblewrap`, and on Ubuntu 23.10+ / 24.04 also an [AppArmor profile](.halo/docs/dev/deploy.md#bubblewrap-on-ubuntu-2310-and-2404-apparmor). Without it the server warns at startup with the fix, `/api/health` shows `sandbox: null`, and non-full sessions can't run shell.
 - **Upgrade**: `halo upgrade && halo server restart`. A server under systemd restarts through `systemctl`; a system unit ([deploy.md Option C](.halo/docs/dev/deploy.md#option-c-systemd-for-the-npm-install)) may need `sudo systemctl restart halo`. Bundled docs, agents and skills refresh on the next start.
 - **Docker / CI**: `halo setup --non-interactive` with `HALO_DEFAULT_PROVIDER=deepseek` and `DEEPSEEK_API_KEY` set binds the built-in agents and writes the key's `<<DEEPSEEK_API_KEY>>` placeholder (never the key) into `~/.halo/secrets/settings.yaml`; keep the variable set for the server too ([deploy.md](.halo/docs/dev/deploy.md#non-interactive-docker--ci-details)). `HALO_PASSWORD` is the *admin* password only.
 - **From source**: `pnpm install && pnpm build` (pnpm 11).
