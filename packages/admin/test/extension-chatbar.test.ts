@@ -27,6 +27,10 @@ const observers: { cb: () => void; targets: Element[] }[] = []
   unobserve() {}
   disconnect() { this.o.targets = [] }
 }
+// jsdom has no matchMedia; use-is-mobile caches the first MediaQueryList, so
+// one stub whose `matches` follows `phone` serves every test (phone layout on).
+let phone = false
+window.matchMedia = ((media: string) => ({ media, get matches() { return phone }, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia
 
 /**
  * Contract: an extension's chat-input toolbar button (manifest `chatbar`).
@@ -36,8 +40,9 @@ const observers: { cb: () => void; targets: Element[] }[] = []
  *    (`ready` → init `view: 'chatbar'`, re-sent per ready; `error` → banner;
  *    file-shaped frames warn) plus `insert-text`: a non-empty string ≤ 10 000
  *    chars is inserted verbatim at the draft's caret / over its selection,
- *    the caret lands after it, the textarea is NOT focused, and nothing is
- *    ever sent (also while a turn runs). `insert-text` anywhere else warns;
+ *    the caret lands after it, the textarea is focused on desktop (NOT on the
+ *    phone layout), and nothing is ever sent (also while a turn runs).
+ *    `insert-text` anywhere else warns;
  *  - one panel at a time; its button / × / Esc closes it, an outside click
  *    does not; closed = iframe unmounted; uninstall, a hidden input (0×0) and
  *    a chat-tab switch close it;
@@ -226,6 +231,7 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     setExtensions({ extensions: [], disabled: [], errors: [] })
     vi.restoreAllMocks()
     vi.useRealTimers()
+    phone = false
   })
 
   // The panel lives under <body>, outside `container`.
@@ -319,41 +325,47 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     expect(onInterrupt).not.toHaveBeenCalled()
   })
 
-  it('insert-text lands at the caret / over the selection, verbatim, never focuses or sends — also mid-turn', async () => {
-    act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
-    const onSend = await renderInput({ isStreaming: true })
-    type('hello world', 5)
-    act(() => button('Voice')!.click())
-    await flush()
-    const win = iframe()!.contentWindow!
-    deliver(win, { haloExt: 1, type: 'ready', protocol: 1 })
-    ;(document.activeElement as HTMLElement | null)?.blur()
+  for (const layout of ['desktop', 'phone'] as const) {
+    it(`insert-text lands at the caret / over the selection, verbatim, ${layout === 'desktop' ? 'focuses the textarea' : 'never focuses'}, never sends — also mid-turn (${layout})`, async () => {
+      phone = layout === 'phone'
+      act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
+      const onSend = await renderInput({ isStreaming: true })
+      type('hello world', 5)
+      act(() => button('Voice')!.click())
+      await flush()
+      const win = iframe()!.contentWindow!
+      deliver(win, { haloExt: 1, type: 'ready', protocol: 1 })
+      ;(document.activeElement as HTMLElement | null)?.blur()
 
-    deliver(win, { haloExt: 1, type: 'insert-text', text: ', dear' })
-    expect(textarea().value).toBe('hello, dear world')
-    expect(textarea().selectionStart).toBe(11)
-    expect(textarea().selectionEnd).toBe(11)
-    deliver(win, { haloExt: 1, type: 'insert-text', text: '!' })           // back-to-back: reads the new caret
-    expect(textarea().value).toBe('hello, dear! world')
+      deliver(win, { haloExt: 1, type: 'insert-text', text: ', dear' })
+      expect(textarea().value).toBe('hello, dear world')
+      expect(textarea().selectionStart).toBe(11)
+      expect(textarea().selectionEnd).toBe(11)
+      if (layout === 'desktop') expect(document.activeElement).toBe(textarea())
+      else expect(document.activeElement).not.toBe(textarea())
+      deliver(win, { haloExt: 1, type: 'insert-text', text: '!' })           // back-to-back: reads the new caret
+      expect(textarea().value).toBe('hello, dear! world')
 
-    textarea().setSelectionRange(13, 18)                                    // select "world"
-    deliver(win, { haloExt: 1, type: 'insert-text', text: 'there\n' })
-    expect(textarea().value).toBe('hello, dear! there\n')
-    expect(textarea().selectionStart).toBe(19)
+      textarea().setSelectionRange(13, 18)                                    // select "world"
+      deliver(win, { haloExt: 1, type: 'insert-text', text: 'there\n' })
+      expect(textarea().value).toBe('hello, dear! there\n')
+      expect(textarea().selectionStart).toBe(19)
 
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    deliver(win, { haloExt: 1, type: 'insert-text', text: '' })
-    deliver(win, { haloExt: 1, type: 'insert-text', text: 'x'.repeat(MAX_INSERT_TEXT + 1) })
-    deliver(win, { haloExt: 1, type: 'insert-text', text: 7 })
-    deliver(win, { haloExt: 1, type: 'send', text: 'go' })                  // no such frame — ignored
-    deliver(window, { haloExt: 1, type: 'insert-text', text: 'spoof' })     // not our iframe
-    expect(textarea().value).toBe('hello, dear! there\n')
-    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual(expect.arrayContaining([expect.stringMatching(/^\[ExtensionChatbar\] voice: /)]))
-    expect(warn).toHaveBeenCalledTimes(4)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      deliver(win, { haloExt: 1, type: 'insert-text', text: '' })
+      deliver(win, { haloExt: 1, type: 'insert-text', text: 'x'.repeat(MAX_INSERT_TEXT + 1) })
+      deliver(win, { haloExt: 1, type: 'insert-text', text: 7 })
+      deliver(win, { haloExt: 1, type: 'send', text: 'go' })                  // no such frame — ignored
+      deliver(window, { haloExt: 1, type: 'insert-text', text: 'spoof' })     // not our iframe
+      expect(textarea().value).toBe('hello, dear! there\n')
+      expect(warn.mock.calls.map((c) => String(c[0]))).toEqual(expect.arrayContaining([expect.stringMatching(/^\[ExtensionChatbar\] voice: /)]))
+      expect(warn).toHaveBeenCalledTimes(4)
 
-    expect(document.activeElement).not.toBe(textarea())
-    expect(onSend).not.toHaveBeenCalled()
-  })
+      if (layout === 'desktop') expect(document.activeElement).toBe(textarea())
+      else expect(document.activeElement).not.toBe(textarea())
+      expect(onSend).not.toHaveBeenCalled()
+    })
+  }
 
   it('uninstalling the open extension closes its panel', async () => {
     act(() => setExtensions({ extensions: [ext('voice', { chatbar: { height: 160, order: 1, title: 'Voice' } })], disabled: [], errors: [] }))
@@ -532,7 +544,8 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
     // document selection on every focus() / blur() and never re-applies it, so
     // the stale selection is placed by hand after the blur, focus moves are
     // left out, and a capture mousedown emulates the re-apply; the real thing
-    // is pinned down by the dev e2e.
+    // is pinned down by the dev e2e. Phone layout only: on desktop insert-text
+    // focuses the textarea, so it is never blurred there.
     function emulateChromeMousedown() {
       const ta = textarea(), s = document.getSelection()!
       const atTextarea = () => s.rangeCount > 0 && s.anchorNode === ta.parentNode && ta.parentNode!.childNodes[s.anchorOffset] === ta
@@ -546,7 +559,8 @@ describe('<MessageInput> chat-bar buttons and panel', () => {
       act(() => { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); el.click() })
     }
     for (const path of ['close-request', 'direct unmount'] as const) {
-      it(`insert-text, then a mouse close (${path}): the next insert-text lands right after the last one`, async () => {
+      it(`phone: insert-text, then a mouse close (${path}): the next insert-text lands right after the last one`, async () => {
+        phone = true
         voice()
         await renderInput()
         type('abc', 3)

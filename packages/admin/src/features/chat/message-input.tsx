@@ -21,6 +21,7 @@ import { ExtensionChatbarControl } from './extension-chatbar-control'
 import { CHATBAR_CLOSED, chatbarReducer, insertAtSelection } from './extension-chatbar-logic'
 import { useChatTabs } from './chat-tabs'
 import { useT } from '@/shared/i18n'
+import { isMobileViewport } from '@/shared/use-is-mobile'
 
 /** Read a File to a base64 string (no data URL prefix), verbatim. */
 function rawFileToBase64(file: File): Promise<string> {
@@ -932,8 +933,10 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
   // Extension chat-bar panel (ExtensionChatbarControl): which one is open
   // (and whether it is busy / winding down — chatbarReducer), and its
   // `insert-text` — the draft's selection is replaced and the caret lands
-  // after the text, without focusing the textarea (focus stays in the panel's
-  // iframe, which may still be dictating). Draft only: nothing is sent.
+  // after the text. On desktop the textarea takes focus too, so Enter sends
+  // what was just dictated (the panel needs no focus: capture goes on in a
+  // blurred iframe); on the phone layout it doesn't, or every recognised
+  // sentence would pop the soft keyboard. Draft only: nothing is sent.
   // flushSync commits before the caret moves, so back-to-back frames each read
   // the DOM value / selection the previous one left.
   const [chatbarPanel, chatbarDispatch] = useReducer(chatbarReducer, CHATBAR_CLOSED)
@@ -952,16 +955,24 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     if (!el) return
     const next = insertAtSelection(el.value, el.selectionStart, el.selectionEnd, ins)
     flushSync(() => { setText(next.value); setCursorPos(next.caret) })
-    el.selectionStart = next.caret
-    el.selectionEnd = next.caret
-    // The textarea is blurred here, and Chrome keeps the document selection
-    // collapsed at it from its last focus: the next mouse press anywhere (the
-    // toolbar button / × closing this panel) re-applies that stale selection,
-    // dropping the caret just set — to 0 after a value change, so the next
-    // insert lands at the front. Drop it; focus() re-creates it.
-    const sel = document.getSelection()
-    if (sel && sel.rangeCount > 0 && document.activeElement !== el && sel.anchorNode?.childNodes[sel.anchorOffset] === el) {
-      sel.removeAllRanges()
+    if (!isMobileViewport()) {
+      // Focus first, then place the caret: focus() may restore the
+      // textarea's selection from its last focus.
+      el.focus()
+      el.setSelectionRange(next.caret, next.caret)
+    } else {
+      el.selectionStart = next.caret
+      el.selectionEnd = next.caret
+      // The textarea stays blurred here, and Chrome keeps the document
+      // selection collapsed at it from its last focus: the next mouse press
+      // anywhere (the toolbar button / × closing this panel) re-applies that
+      // stale selection, dropping the caret just set — to 0 after a value
+      // change, so the next insert lands at the front. Drop it; focus()
+      // re-creates it.
+      const sel = document.getSelection()
+      if (sel && sel.rangeCount > 0 && document.activeElement !== el && sel.anchorNode?.childNodes[sel.anchorOffset] === el) {
+        sel.removeAllRanges()
+      }
     }
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 200) + 'px'
