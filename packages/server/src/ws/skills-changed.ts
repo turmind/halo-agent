@@ -13,12 +13,13 @@
  * frontmatter block), so the watcher stays silent for what lists can't show
  * (a body edit, a resource file, an identical rewrite) and for the echo of a
  * mutation that already announced itself — one frame per change, like the
- * extensions watcher. `~/.halo/global/skills/` has no watcher: a hand edit
- * there shows on the Skills page's window-focus refetch.
+ * extensions watcher. Global skill UI lists still refetch on window focus;
+ * session-access-watchers independently revokes grants for external edits.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { broadcast, broadcastToWorkspace } from './broadcast.js'
+import { extensionSessionAccess } from '../extensions/session-access.js'
 
 const folderKeys = new Map<string, string>()
 
@@ -45,6 +46,7 @@ export function skillFoldersChanged(root: string): boolean {
 
 /** `workspacePath` null = a global skill changed → every socket. */
 export function notifySkillsChanged(workspacePath: string | null): void {
+  extensionSessionAccess.invalidateSkills(workspacePath)
   if (!workspacePath) return broadcast({ type: 'skills:changed' })
   skillFoldersChanged(workspacePath)
   broadcastToWorkspace(workspacePath, { type: 'skills:changed' })

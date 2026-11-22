@@ -307,6 +307,9 @@ export function authMiddleware() {
     if (EXTENSION_ASSET_PATH.test(path)) {
       return next()
     }
+    // This exact subtree owns cookie OR session-bearer validation. Do not
+    // delegate /extensions (assets/settings) or any other API to that key.
+    if (/^\/api\/ext\/[a-z0-9][a-z0-9_-]{0,63}(?:\/|$)/.test(path)) return next()
 
     const token = getCookie(c as never, COOKIE_NAME)
     const payload = validateToken(token)

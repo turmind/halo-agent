@@ -17,6 +17,7 @@ import { GOAL_AGENT_ID } from './goal-mode.js'
 import { buildA2ATools } from '../a2a/outbound.js'
 import { buildNodeTools } from '../nodes/tools.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
+import { extensionSessionAccess } from '../extensions/session-access.js'
 
 /** The A2A channel's session-id stem (`a2a_<accountId>_…`, routes.ts). */
 const A2A_SESSION_STEM = sessionPrefix('a2a', '').slice(0, -1)
@@ -199,6 +200,7 @@ export class SessionAgentBuilder {
       accessLevel: accessLevel ?? 'full',
       allowedNamespaces,
       supportsVision: modelSupportsImage(modelId, imageOverride),
+      shellContext: () => extensionSessionAccess.shellContext(this.host.workspaceRoot, sessionId),
     })
     // A2A read-only: the side-effect-free set regardless of sandbox backend
     // (a bwrap-contained shell_exec is still a side effect the caller didn't earn).
