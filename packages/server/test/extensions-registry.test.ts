@@ -208,7 +208,7 @@ describe('parseManifest', () => {
   })
 
   it('extensions: [] allowed only with activity or chatbar; key still required and must be an array', () => {
-    const arrErr = 'extensions must be an array (empty is fine with activity or chatbar)'
+    const arrErr = 'extensions must be an array (empty is fine with activity, chatbar or canvas)'
     expect(parse({ extensions: [], activity: {} })).toMatchObject({ extensions: [], activity: { order: 100 } })
     expect(parse({ extensions: [], chatbar: {} })).toMatchObject({ extensions: [], chatbar: { height: 160, order: 100 } })
     expect(errorOf(parse({ extensions: [] }))).toBe('extensions must be a non-empty array')

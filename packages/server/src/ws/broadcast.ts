@@ -74,11 +74,16 @@ export function broadcast(event: WsServerMessage): void {
  * Falls back to the global broadcast when no resolver is registered (the
  * AgentCore A2A mode never calls `setBroadcastWss`, so this is a no-op there;
  * a future embedder without the resolver keeps the old, louder behavior
- * rather than silently dropping events).
+ * rather than silently dropping events). Extension notices are the exception:
+ * their workspace attribution must fail closed without a resolver.
  */
 export function broadcastToWorkspace(workspacePath: string, event: WsServerMessage): void {
   if (!_wss) return
-  if (!_workspaceOfClient) return broadcast(event)
+  // Notice attribution must never fall back to an all-workspace broadcast.
+  if (!_workspaceOfClient) {
+    if (event.type.startsWith('extension:notice')) return
+    return broadcast(event)
+  }
   const target = path.resolve(workspacePath)
   const payload = JSON.stringify(event)
   for (const client of _wss.clients) {

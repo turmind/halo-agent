@@ -154,6 +154,8 @@ export async function execSkillCommand(
    *  (which would otherwise be the only path that updates the row). */
   channelAccessLevel?: 'readonly' | 'workspace' | 'full',
   lang: Lang = 'en',
+  /** Authenticated Admin ingress only; called after append, before execution. */
+  onAcceptedHumanInput?: (sessionId: string) => void,
 ): Promise<'not_found' | 'ok' | string> {
   // Always rescan — frontmatter changes (e.g. flipping requiresAccess on
   // a deployed skill) must take effect for subsequent invocations without
@@ -254,6 +256,7 @@ export async function execSkillCommand(
   const displayMessage = `[Skill activated: /${cmdName}]${args ? ` ${args}` : ''}`
   const agentMessage = `[Skill activated: /${cmdName}]\n\n${body}`
   const stamp = sm.appendUserMessage(sessionId, displayMessage)
+  onAcceptedHumanInput?.(sessionId)
   sm.sendUserMessage(sessionId, agentMessage, undefined, undefined, stamp).catch(() => {})
   return 'ok'
 }

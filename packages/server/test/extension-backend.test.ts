@@ -99,6 +99,8 @@ const current: ReturnType<typeof createExtensionBackends> = {
   acquire: (e) => backends.acquire(e), release: (b) => backends.release(b), reconcile: (s) => backends.reconcile(s),
   suspend: (id) => backends.suspend(id), failure: (e) => backends.failure(e), onFailure: (cb) => backends.onFailure(cb),
   list: () => backends.list(), close: () => backends.close(),
+  sendToGeneration: (id, generation, message) => backends.sendToGeneration(id, generation, message),
+  onMessage: (listener) => backends.onMessage(listener), onExit: (listener) => backends.onExit(listener),
 }
 
 beforeAll(async () => {

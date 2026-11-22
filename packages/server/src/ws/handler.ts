@@ -26,10 +26,13 @@ import { setClientWorkspaceResolver } from './broadcast.js'
 import { TerminalManager } from './terminal-manager.js'
 import { dispatchCommand as sharedDispatchCommand, type CommandContext as SharedCommandContext } from '../channels/shared/commands.js'
 import { resolveGoalRoute } from '../agents/goal-mode.js'
+import type { ExtensionNotices } from '../extensions/notices.js'
 
 export interface WsHandlerDeps {
   wss: WebSocketServer
   registry: SessionManagerRegistry
+  extensionNotices?: Pick<ExtensionNotices, 'respond' | 'snapshot'>
+  acceptAdminInput?: (projectId: string, sessionId: string) => string
 }
 
 /**
@@ -47,7 +50,7 @@ export interface WsHandlerDeps {
 const CLIENT_SILENCE_LIMIT_MS = 3 * 60_000
 
 /** Wire shape lives in @turmind/halo-core/protocol (shared with the admin). */
-type ClientMessage = WsClientMessage
+type ClientMessage = Exclude<WsClientMessage, { type: 'extension:notice:respond' }>
 
 interface ConnectedClient {
   ws: WebSocket
@@ -409,10 +412,10 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       // emits while nothing else is chatty.
       client.lastClientPingAt = Date.now()
 
-      let msg: ClientMessage
+      let msg: WsClientMessage
       try {
         const text = typeof raw === 'string' ? raw : raw.toString('utf-8')
-        msg = JSON.parse(text) as ClientMessage
+        msg = JSON.parse(text) as WsClientMessage
       } catch {
         sendJson(ws, { type: 'error', error: 'Invalid JSON message' })
         return
@@ -438,6 +441,11 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       messageQueue = messageQueue.then(async () => {
         try {
           switch (msg.type) {
+            case 'extension:notice:respond': {
+              const projectId = client.projectId && resolveProjectPath(client.projectId)
+              if (deps.extensionNotices) sendJson(ws, deps.extensionNotices.respond(projectId ? path.resolve(projectId) : null, msg))
+              break
+            }
             case 'chat':
               await handleChat(client, msg)
               break
@@ -447,9 +455,12 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
             case 'chat:interrupt':
               handleChatInterrupt(client, msg)
               break
-            case 'subscribe':
+            case 'subscribe': {
               await handleSubscribe(client, msg)
+              const projectId = client.projectId && resolveProjectPath(client.projectId)
+              if (projectId && deps.extensionNotices) sendJson(ws, deps.extensionNotices.snapshot(path.resolve(projectId)))
               break
+            }
             case 'unsubscribe':
               // Release one subscription's listener only — no reply frame, and
               // a running agent keeps running. The admin never closes a tab
@@ -523,7 +534,10 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
               // All other commands: route through shared dispatchCommand
               const sharedCtx = buildSharedCommandContext(client, sid)
-              const result = await sharedDispatchCommand(sharedCtx, `/${cmdName}`, (msg.message ?? '').trim(), { channelName: 'ws' })
+              const result = await sharedDispatchCommand(sharedCtx, `/${cmdName}`, (msg.message ?? '').trim(), {
+                channelName: 'ws',
+                onAcceptedHumanInput: (acceptedSid) => deps.acceptAdminInput?.(path.resolve(sharedCtx.workspacePath), acceptedSid),
+              })
               if (result) {
                 sendJson(ws, { type: 'chat:system', text: result.text, sessionId: sid })
                 // Surface session switch (e.g. /new creates a new session
@@ -548,7 +562,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err)
           console.debug(`[WS] Error handling message: ${errorMessage}`)
-          sendJson(ws, { type: 'error', error: errorMessage, ...(msg.sessionId ? { sessionId: msg.sessionId } : {}) })
+          sendJson(ws, { type: 'error', error: errorMessage, ...('sessionId' in msg && msg.sessionId ? { sessionId: msg.sessionId } : {}) })
         }
       })
     })
@@ -636,9 +650,10 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       // workspace. Same fallback pattern `subscribe` uses.
       const projectId = msg.projectId ?? client.projectId
       if (!msg.sessionId || !projectId) return null
+      const projectPath = resolveProjectPath(projectId)
+      if (!projectPath) return null
       setClientProject(client, projectId)
       const agentId = msg.agentId ?? client.agentId
-      const projectPath = resolveProjectPath(projectId)
       if (projectPath) {
         client.sessionManager = getSessionManager(projectPath)
         // Keep the file watcher pinned to the active workspace. Without this,
@@ -701,6 +716,10 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         return
       }
       const projectPath = resolveProjectPath(msg.projectId)
+      if (!projectPath) {
+        sendJson(ws, { type: 'error', error: 'Cannot resolve project path', sessionId: msg.sessionId })
+        return
+      }
       let sid = await bindOrCreateSession(client, msg)
       if (!sid || !client.sessionManager) {
         sendJson(ws, { type: 'error', error: 'Cannot resolve project path', sessionId: msg.sessionId })
@@ -746,10 +765,15 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         }
       }
 
+      // Another socket can finish a resend during the awaits above. Keep this
+      // check, append, dedup and human marker synchronous, before any execution.
+      if (msg.clientMsgId && ackedChatIds.has(msg.clientMsgId)) { ackChat(msg); return }
+      const stamp = sm.appendUserMessage(sid, uiMessage, { local: true })
+      rememberChat(msg)
+      deps.acceptAdminInput?.(path.resolve(projectPath), sid)
+
       if (sm.isSessionCompacting(sid)) {
         console.debug(`[WS] Chat queued (compact in progress): session=${msg.sessionId}`)
-        const stamp = sm.appendUserMessage(sid, uiMessage, { local: true })
-        rememberChat(msg)
         await sm.enqueueUserMessage(sid, msg.message, msg.images, stamp)
         ackChat(msg)
         // An auto-compact runs inside a turn — the message waits for the turn
@@ -763,15 +787,11 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
       if (sm.isSessionRunning(sid)) {
         console.debug(`[WS] Chat queued (agent busy): session=${msg.sessionId}`)
-        const stamp = sm.appendUserMessage(sid, uiMessage, { local: true })
-        rememberChat(msg)
         await sm.enqueueUserMessage(sid, msg.message, msg.images, stamp)
         ackChat(msg)
         return
       }
 
-      const stamp = sm.appendUserMessage(sid, uiMessage, { local: true })
-      rememberChat(msg)
       ackChat(msg)
       console.debug(`[WS] Chat: session=${msg.sessionId}, project=${msg.projectId}, agent=${msg.agentId ?? client.agentId}`)
 

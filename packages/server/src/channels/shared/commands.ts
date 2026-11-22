@@ -662,32 +662,32 @@ export async function dispatchCommand(
   ctx: CommandContext,
   command: string,
   arg: string,
-  opts?: { channelName?: string; extraHelpLines?: Array<string | { head: string; desc: string }> },
+  opts?: { channelName?: string; extraHelpLines?: Array<string | { head: string; desc: string }>; onAcceptedHumanInput?: (sessionId: string) => void },
 ): Promise<CommandResult | null> {
   // Expand aliases before routing — affects all channels uniformly.
   ;({ command, arg } = expandAlias(command, arg))
   switch (command) {
     case '/help': return execHelp(ctx, opts?.extraHelpLines)
-    case '/workspace': return routeObjectOrSkill(ctx, command, arg)
+    case '/workspace': return routeObjectOrSkill(ctx, command, arg, opts?.onAcceptedHumanInput)
     case '/evo': return execNote(ctx, arg)
     // Session lifecycle is an object command: /session new|list|switch|stop|…
-    case '/session': return routeObjectOrSkill(ctx, command, arg)
+    case '/session': return routeObjectOrSkill(ctx, command, arg, opts?.onAcceptedHumanInput)
     // `/agent` is a builtin object command: its list/switch/desc/delete verbs
     // are deterministic builtin code, so it works on EVERY agent regardless of
     // whether the `agent` skill is whitelisted. create/update fall through to
     // the agent skill. Explicit case (not default) so it's always registered
     // and the startup descriptor↔dispatch assertion is satisfied.
-    case '/agent': return routeObjectOrSkill(ctx, command, arg)
-    case '/skill': return routeObjectOrSkill(ctx, command, arg)
+    case '/agent': return routeObjectOrSkill(ctx, command, arg, opts?.onAcceptedHumanInput)
+    case '/skill': return routeObjectOrSkill(ctx, command, arg, opts?.onAcceptedHumanInput)
     // Goal mode (docs/plans/loop-mode.md): all verbs are builtin (no backing
     // skill) — create/status/pause/resume/clear in SUBCOMMAND_ROUTES.
     case '/goal': return config.goalModeEnabled
-      ? routeObjectOrSkill(ctx, command, arg)
+      ? routeObjectOrSkill(ctx, command, arg, opts?.onAcceptedHumanInput)
       : { text: t('goal.disabled', ctx.lang) }
     default:
       // Skill-defined slash commands — same routing, but
       // reached only when the command isn't a builtin above.
-      return routeObjectOrSkill(ctx, command, arg)
+      return routeObjectOrSkill(ctx, command, arg, opts?.onAcceptedHumanInput)
   }
 }
 
@@ -697,6 +697,7 @@ async function routeObjectOrSkill(
   ctx: CommandContext,
   command: string,
   arg: string,
+  onAcceptedHumanInput?: (sessionId: string) => void,
 ): Promise<CommandResult | null> {
   const routed = await tryRouteSubcommand(ctx, command, arg)
   if (routed !== NOT_ROUTED) return routed
@@ -707,7 +708,7 @@ async function routeObjectOrSkill(
     // recent admin-side change (readonly → workspace, etc.) takes effect
     // immediately. Without this we'd gate against the session row's stale
     // snapshot.
-    const result = await execSkillCommand(command, arg, ctx.sm, active, ctx.workspacePath, ctx.channel, capLevel(ctx.accessLevel), ctx.lang)
+    const result = await execSkillCommand(command, arg, ctx.sm, active, ctx.workspacePath, ctx.channel, capLevel(ctx.accessLevel), ctx.lang, onAcceptedHumanInput)
     // 'ok' means execSkillCommand kicked sendUserMessage — the agent is now
     // running on `active`. Surface that so the channel keeps its event stream
     // open for the skill body's response.

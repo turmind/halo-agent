@@ -82,11 +82,12 @@
  * the confirm prompt.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
-import type { ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { ExtensionBackendHostMessage, ExtensionInfo, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { cleanChildEnv } from '../child-env.js'
 import { getServerParam, getServerSecret } from '../config.js'
 import { globalExtensionDataDir } from '../paths.js'
@@ -114,6 +115,8 @@ const PRELOAD = "data:text/javascript,process.on('disconnect',()=>process.exit(0
 
 export interface RunningBackend {
   id: string
+  /** Opaque incarnation, changed on every spawn (not the package version). */
+  generation: string
   /** Where the child listens; the proxy connects with `socketPath`. */
   socket: string
   pid: number | undefined
@@ -155,6 +158,10 @@ export interface ExtensionBackends {
   failure(ext: ExtensionInfo): string | undefined
   /** Called when a budget runs out (the watcher rescans and pushes it). */
   onFailure(cb: () => void): void
+  /** Queues IPC only to this live incarnation; false means not queued. */
+  sendToGeneration(id: string, generation: string, message: ExtensionBackendHostMessage): boolean
+  onMessage(listener: (id: string, generation: string, message: unknown) => void): () => void
+  onExit(listener: (id: string, generation: string) => void): () => void
   /** Running backends (tests, logs). */
   list(): RunningBackend[]
   close(): Promise<void>
@@ -236,6 +243,8 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
   const lookup = opts.lookup ?? backendExtension
   /** One entry per id, kept until its process has exited (stopping included). */
   const running = new Map<string, Backend>()
+  const messageListeners = new Set<(id: string, generation: string, message: unknown) => void>()
+  const exitListeners = new Set<(id: string, generation: string) => void>()
   /** Ids the installer holds (suspend): no start until it lets go. */
   const suspended = new Map<string, number>()
   /** Restart budget per id, keyed to the version it counted against.
@@ -324,7 +333,7 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
     let exitCb: () => void
     const exited = new Promise<void>((r) => { exitCb = r })
     const b: Backend = {
-      id: ext.id, socket, pid: child.pid, key: keyOf(ext), child, nodePid: undefined,
+      id: ext.id, generation: randomUUID(), socket, pid: child.pid, key: keyOf(ext), child, nodePid: undefined,
       ready: Promise.resolve(), active: 0, idleTimer: null, busy: false, exited, stopping: false, dead: false,
     }
     let isReady = false
@@ -352,10 +361,14 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
         }
         reject(new Error(`exited before ready (${why})`))
         exitCb()
+        for (const listener of exitListeners) listener(b.id, b.generation)
       }
       child.on('message', (m) => {
+        if (b.dead) return
         const msg = m as { type?: unknown; pid?: unknown } | null
         if (msg?.type === 'halo:pid' && typeof msg.pid === 'number') b.nodePid = msg.pid
+        if (b.stopping) return
+        for (const listener of messageListeners) listener(b.id, b.generation, m)
         if (msg?.type === 'busy') {
           b.busy = (msg as { busy?: unknown }).busy === true
           if (b.busy && b.idleTimer) { clearTimeout(b.idleTimer); b.idleTimer = null }
@@ -489,8 +502,29 @@ export function createExtensionBackends(opts: ExtensionBackendsOptions = {}): Ex
     onFailure(cb) {
       onFailureChange = cb
     },
+    sendToGeneration(id, generation, message) {
+      const b = running.get(id)
+      if (!b || b.generation !== generation || b.dead || b.stopping || !b.child.connected) return false
+      try {
+        // child.send's false is backpressure, NOT a failed enqueue. A callback
+        // error means delivery failed: stop this generation, never replay it.
+        b.child.send(message, (err) => { if (err) stop(b, 'IPC delivery failed') })
+        return true
+      } catch {
+        stop(b, 'IPC delivery failed')
+        return false
+      }
+    },
+    onMessage(listener) {
+      messageListeners.add(listener)
+      return () => { messageListeners.delete(listener) }
+    },
+    onExit(listener) {
+      exitListeners.add(listener)
+      return () => { exitListeners.delete(listener) }
+    },
     list() {
-      return [...running.values()].filter((b) => !b.stopping).map(({ id, socket, pid }) => ({ id, socket, pid }))
+      return [...running.values()].filter((b) => !b.stopping).map(({ id, generation, socket, pid }) => ({ id, generation, socket, pid }))
     },
     async close() {
       closing = true

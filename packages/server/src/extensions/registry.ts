@@ -19,7 +19,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ExtensionActivity, ExtensionBackend, ExtensionCapability, ExtensionChatbar, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
+import type { ExtensionActivity, ExtensionBackend, ExtensionCanvasDeclaration, ExtensionCapability, ExtensionChatbar, ExtensionError, ExtensionInfo, ExtensionPlatform, ExtensionSettingField, ExtensionSettings, ExtensionsSnapshot } from '@turmind/halo-core/protocol'
 import { globalExtensionsDir } from '../paths.js'
 import { backendIsolation } from '../tools/sandbox.js'
 import { confirmedBackendIds, disabledExtensionIds, dropBackendConfirmations } from './state.js'
@@ -166,6 +166,26 @@ export function parseManifest(
     }
   }
 
+  let canvas: ExtensionCanvasDeclaration | undefined
+  if (m.canvas !== undefined) {
+    if (typeof m.canvas !== 'object' || m.canvas === null || Array.isArray(m.canvas)) return { error: 'canvas must be an object' }
+    const c = m.canvas as Record<string, unknown>
+    canvas = {}
+    if (c.icon !== undefined) {
+      if (typeof c.icon !== 'string' || c.icon === '' || c.icon.startsWith('/') || c.icon.split(/[\\/]/).includes('..') || !/\.(svg|png)$/i.test(c.icon)) {
+        return { error: 'canvas.icon must be a relative .svg or .png path inside the extension directory' }
+      }
+      if (!entryExists(c.icon)) return { error: `canvas icon not found: ${c.icon}` }
+      canvas.icon = c.icon
+    }
+    for (const k of ['title', 'title_zh'] as const) {
+      const v = c[k]
+      if (v === undefined) continue
+      if (typeof v !== 'string' || v.trim() === '' || v.length > 64) return { error: `canvas.${k} must be a non-empty string (≤ 64 chars)` }
+      canvas[k] = v
+    }
+  }
+
   let backend: ExtensionBackend | undefined
   if (m.backend !== undefined) {
     if (typeof m.backend !== 'object' || m.backend === null || Array.isArray(m.backend)) return { error: 'backend must be an object' }
@@ -177,10 +197,10 @@ export function parseManifest(
     backend = { entry: b.entry }
   }
 
-  // The key stays required even for an activity / chatbar-only extension
-  // (`[]`): the `extension` skill's ext.sh pre-check demands it.
-  if (activity || chatbar) {
-    if (!Array.isArray(m.extensions)) return { error: 'extensions must be an array (empty is fine with activity or chatbar)' }
+  // The key stays required even for a file-less extension (`[]`):
+  // the `extension` skill's ext.sh pre-check demands it.
+  if (activity || chatbar || canvas) {
+    if (!Array.isArray(m.extensions)) return { error: 'extensions must be an array (empty is fine with activity, chatbar or canvas)' }
   } else if (!Array.isArray(m.extensions) || m.extensions.length === 0) return { error: 'extensions must be a non-empty array' }
   for (const e of m.extensions) {
     if (typeof e !== 'string' || !FILE_EXT_RE.test(e)) return { error: `extensions entry "${String(e)}" must look like ".glb" (lowercase, with dot)` }
@@ -249,6 +269,7 @@ export function parseManifest(
     ...(settings ? { settings } : {}),
     ...(activity ? { activity } : {}),
     ...(chatbar ? { chatbar } : {}),
+    ...(canvas ? { canvas } : {}),
     ...(backend ? { backend } : {}),
     ...(m.homepage !== undefined ? { homepage: m.homepage } : {}),
     ...(m.license !== undefined ? { license: m.license } : {}),
