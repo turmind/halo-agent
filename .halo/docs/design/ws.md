@@ -167,7 +167,7 @@ First valid answer consumes the notice synchronously. Wrong workspace/generation
 
 **Admin input marker.** `WsHandlerDeps.acceptAdminInput` is called after accepted chat append/dedup and before enqueue/send, for the session that actually receives the input. Explicit skill commands pass `onAcceptedHumanInput` through shared dispatch to `execSkillCommand`, only after its permission/render validation and append, before execution. Builtin/help/rejected commands and other channels do not stamp it. Chat resend dedup is checked again after async preparation so two sockets cannot rotate it twice. The broker callback rotates session bearers; a marker is not semantic approval or a login-success claim.
 
-Phase-1 boundary: handler dependencies and notice broker are implemented/tested; server bootstrap subscription to `extensionSessionAccess` and Admin notice UI are separate integration steps.
+`index.ts` wires these handler dependencies to `extensionSessionAccess` and the notice broker. It subscribes private backend IPC and caller events before the listener starts accepting requests; the actual bound listener supplies the loopback URL. Shutdown revokes caller bindings and closes notices before Admin sockets/backends, then removes subscriptions. AgentCore never starts these hooks. Admin queue/Canvas UI remains a separate integration step.
 
 ### `error` frames: optional `code`
 
