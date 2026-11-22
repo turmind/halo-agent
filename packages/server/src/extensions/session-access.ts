@@ -29,7 +29,7 @@ export type ExtensionAccessEvent = {
 type ShellContext = { env: Record<string, string>; secrets: string[] }
 type Identity = Omit<ExtensionEntitlement, 'extensionIds'>
 type Slot = {
-  projectId: string; sessionId: string; epoch: number; stopped: boolean
+  projectId: string; sessionId: string; epoch: number; references: number
   userTurnId: string | null
   entitlement?: Promise<ExtensionEntitlement | null>
   issued: Map<string, { accessKey: string; grant: Grant }>
@@ -40,10 +40,12 @@ type Grant = {
 }
 type Binding = {
   extensionId: string; generation: string; caller: ExtensionCaller
-  expiresAt: number; cacheKey: string
+  expiresAt: number; cacheKey: string; slot?: Slot
+  // Notice retention extends routing, never a live Admin HTTP/WS connection.
+  abort?: AbortController; connectionExpiresAt?: number
 }
 export class ExtensionAccessError extends Error {
-  constructor(public status: 401 | 403, message = status === 401 ? 'Unauthorized' : 'Forbidden') { super(message) }
+  constructor(public status: 401 | 403 | 503, message = status === 401 ? 'Unauthorized' : 'Forbidden') { super(message) }
 }
 const MAX_ENTRIES = 4096
 const ROTATE_BEFORE_MS = 60_000
@@ -53,7 +55,7 @@ const slotKey = (projectId: string, sessionId: string) => JSON.stringify([projec
 /** Cold path only. Never creates a workspace or trusts an agent id supplied by
  * the shell. DB rows and the same model-enabled metadata loader as the builder
  * determine entitlement; a same-named workspace/global override grants nothing. */
-async function loadEntitlement(projectId: string, sessionId: string): Promise<ExtensionEntitlement | null> {
+async function loadEntitlement(projectId: string, sessionId: string, watch: (root: string) => void): Promise<ExtensionEntitlement | null> {
   const dbPath = path.join(projectId, '.halo', 'halo.db')
   if (!fs.existsSync(dbPath)) return null
   const db = openHaloDb(path.dirname(dbPath))
@@ -76,8 +78,13 @@ async function loadEntitlement(projectId: string, sessionId: string): Promise<Ex
   if (!yaml?.tools?.includes('shell_exec') || ['global', 'workspace'].some((scope) => disabledAgents.has(`${scope}:${row.agentId}`))) {
     return { ...identity, extensionIds: [] }
   }
-  const skills = await loadSkillMetadata(yaml.skills ?? [], projectId, getDisabledSet(db, 'skill'), null)
   const dirs = listSkillDirs(projectId)
+  // Watch candidates BEFORE metadata filtering/await: a disabled or malformed
+  // shipped skill must invalidate the negative cache when edited too.
+  for (const source of dirs) {
+    if (source.scope === 'extension' && !source.overridden && yaml.skills?.includes(source.id)) watch(path.dirname(source.dir))
+  }
+  const skills = await loadSkillMetadata(yaml.skills ?? [], projectId, getDisabledSet(db, 'skill'), null)
   const off = disabledExtensionIds()
   const confirmed = confirmedBackendIds()
   const extensionIds = new Set<string>()
@@ -102,6 +109,12 @@ async function loadEntitlement(projectId: string, sessionId: string): Promise<Ex
 export class ExtensionSessionAccess {
   private baseUrl: string | null = null
   private slots = new Map<string, Slot>()
+  private idleSlots = new Set<string>()
+  private projectSlots = new Map<string, number>()
+  // Explicit lifecycle fences outlive reclaimable metadata/markers. No eviction:
+  // old tool closures remain fenced until an actual run resumes (or shutdown).
+  private stopped = new Set<string>()
+  private projects = new Map<string, string>()
   private grants = new Map<string, Grant>()
   private bindings = new Map<string, Binding>()
   private bindingKeys = new Map<string, string>()
@@ -109,9 +122,10 @@ export class ExtensionSessionAccess {
   private listeners = new Set<(event: ExtensionAccessEvent) => void>()
   private timer: NodeJS.Timeout | undefined
   private nextExpiry = Infinity
+  private expiryDirty = false
   private watchers: ExtensionAccessWatchers
 
-  constructor(private load: (projectId: string, sessionId: string) => Promise<ExtensionEntitlement | null> = loadEntitlement) {
+  constructor(private load?: (projectId: string, sessionId: string) => Promise<ExtensionEntitlement | null>) {
     this.watchers = new ExtensionAccessWatchers((projectId) => this.invalidateSkills(projectId))
   }
 
@@ -123,25 +137,50 @@ export class ExtensionSessionAccess {
     this.baseUrl = url.origin
   }
 
+  private project(projectId: string): string {
+    const cached = this.projects.get(projectId)
+    if (cached) return cached
+    const resolved = fs.realpathSync(projectId)
+    if (this.projects.size >= MAX_ENTRIES) this.projects.delete(this.projects.keys().next().value!)
+    this.projects.set(projectId, resolved)
+    return resolved
+  }
+
   private slot(projectId: string, sessionId: string): Slot {
     const key = slotKey(projectId, sessionId)
     let slot = this.slots.get(key)
     if (!slot) {
-      // Never evict a Stop tombstone to make space: an old tool closure must
-      // not become eligible again just because other sessions were opened.
-      if (this.slots.size >= MAX_ENTRIES) return { projectId, sessionId, epoch: 0, stopped: true, userTurnId: null, issued: new Map() }
-      slot = { projectId, sessionId, epoch: 0, stopped: false, userTurnId: null, issued: new Map() }
+      if (this.slots.size >= MAX_ENTRIES) {
+        const idle = this.idleSlots.values().next().value
+        if (!idle) throw new ExtensionAccessError(503, 'Extension access unavailable: session capacity reached')
+        const evicted = this.slots.get(idle)!
+        this.slots.delete(idle)
+        this.idleSlots.delete(idle)
+        const remaining = this.projectSlots.get(evicted.projectId)! - 1
+        if (remaining) this.projectSlots.set(evicted.projectId, remaining)
+        else { this.projectSlots.delete(evicted.projectId); this.watchers.unwatchWorkspace(evicted.projectId) }
+      }
+      slot = { projectId, sessionId, epoch: 0, references: 0, userTurnId: null, issued: new Map() }
       this.slots.set(key, slot)
+      this.projectSlots.set(projectId, (this.projectSlots.get(projectId) ?? 0) + 1)
     }
+    if (slot.references === 0) { this.idleSlots.delete(key); this.idleSlots.add(key) }
     return slot
   }
 
+  private reference(slot: Slot, delta: number): void {
+    slot.references += delta
+    const key = slotKey(slot.projectId, slot.sessionId)
+    if (this.slots.get(key) !== slot) return // an async load may finish after close
+    if (slot.references) this.idleSlots.delete(key)
+    else this.idleSlots.add(key)
+  }
+
   private entitlement(slot: Slot): Promise<ExtensionEntitlement | null> {
-    // Re-check watcher registration even on a cache hit: a failed fs watch
-    // re-arm must not leave a cached eligible slot with no invalidation source.
-    this.watchers.watchWorkspace(slot.projectId)
     if (!slot.entitlement) {
-      slot.entitlement = this.load(slot.projectId, slot.sessionId)
+      this.watchers.watchWorkspace(slot.projectId)
+      slot.entitlement = this.load ? this.load(slot.projectId, slot.sessionId)
+        : loadEntitlement(slot.projectId, slot.sessionId, (root) => this.watchers.watch(root, null))
     }
     return slot.entitlement
   }
@@ -150,32 +189,36 @@ export class ExtensionSessionAccess {
     const empty = { env: {}, secrets: [] }
     if (!this.baseUrl) return empty
     this.sweepIfDue()
-    projectId = fs.realpathSync(projectId)
+    projectId = this.project(projectId)
+    if (this.stopped.has(slotKey(projectId, sessionId))) return empty
     const slot = this.slot(projectId, sessionId)
-    if (slot.stopped) return empty
     const epoch = slot.epoch
-    const entitlement = await this.entitlement(slot)
-    if (!entitlement || slot.epoch !== epoch || slot.stopped || !this.baseUrl) return empty
-    const map: ExtensionBackendAccessMap = {}
-    for (const extensionId of entitlement.extensionIds) {
-      this.watchers.watch(path.join(extensionsRoot(), extensionId, 'skills'), null)
-      let issued = slot.issued.get(extensionId)
-      if (!issued || issued.grant.expiresAt - Date.now() <= ROTATE_BEFORE_MS) {
-        if (this.grants.size >= MAX_ENTRIES) continue
-        const accessKey = crypto.randomBytes(32).toString('base64url')
-        const grant: Grant = {
-          slot, identity: { projectId, sessionId, rootSessionId: entitlement.rootSessionId, agentId: entitlement.agentId }, extensionId, userTurnId: slot.userTurnId,
-          expiresAt: Date.now() + EXTENSION_ACCESS_TTL_MS, digest: digest(accessKey), abort: new AbortController(),
+    this.reference(slot, 1)
+    try {
+      const entitlement = await this.entitlement(slot)
+      if (!entitlement || slot.epoch !== epoch || !this.baseUrl) return empty
+      const map: ExtensionBackendAccessMap = {}
+      for (const extensionId of entitlement.extensionIds) {
+        let issued = slot.issued.get(extensionId)
+        if (!issued || issued.grant.expiresAt - Date.now() <= ROTATE_BEFORE_MS) {
+          if (this.grants.size >= MAX_ENTRIES) throw new ExtensionAccessError(503, 'Extension access unavailable: grant capacity reached')
+          const accessKey = crypto.randomBytes(32).toString('base64url')
+          const grant: Grant = {
+            slot, identity: { projectId, sessionId, rootSessionId: entitlement.rootSessionId, agentId: entitlement.agentId }, extensionId, userTurnId: slot.userTurnId,
+            expiresAt: Date.now() + EXTENSION_ACCESS_TTL_MS, digest: digest(accessKey), abort: new AbortController(),
+          }
+          this.grants.set(grant.digest, grant)
+          this.expiryDirty = true
+          this.reference(slot, 1)
+          issued = { accessKey, grant }
+          slot.issued.set(extensionId, issued)
+          this.schedule()
         }
-        this.grants.set(grant.digest, grant)
-        issued = { accessKey, grant }
-        slot.issued.set(extensionId, issued)
+        map[extensionId] = { url: `${this.baseUrl}/api/ext/${extensionId}`, accessKey: issued.accessKey, expiresAt: new Date(issued.grant.expiresAt).toISOString() }
       }
-      map[extensionId] = { url: `${this.baseUrl}/api/ext/${extensionId}`, accessKey: issued.accessKey, expiresAt: new Date(issued.grant.expiresAt).toISOString() }
-    }
-    this.schedule()
-    if (!Object.keys(map).length) return empty
-    return { env: { [EXTENSION_BACKENDS_ENV]: JSON.stringify(map), [EXTENSION_NODE_ENV]: process.execPath }, secrets: Object.values(map).map((entry) => entry.accessKey) }
+      if (!Object.keys(map).length) return empty
+      return { env: { [EXTENSION_BACKENDS_ENV]: JSON.stringify(map), [EXTENSION_NODE_ENV]: process.execPath }, secrets: Object.values(map).map((entry) => entry.accessKey) }
+    } finally { this.reference(slot, -1) }
   }
 
   /** Authentication only uses the digest registry, never a routing binding. */
@@ -190,42 +233,55 @@ export class ExtensionSessionAccess {
   bindSession(extensionId: string, generation: string, authorization: string): { caller: ExtensionCaller; signal: AbortSignal } {
     const grant = this.validate(extensionId, authorization)
     const cacheKey = JSON.stringify([extensionId, generation, grant.digest])
-    const caller = this.bind(cacheKey, extensionId, generation, {
+    const binding = this.bind(cacheKey, extensionId, generation, {
       kind: 'session', ...grant.identity, bindingId: crypto.randomUUID(), userTurnId: grant.userTurnId,
-    }, grant.expiresAt)
-    return { caller, signal: grant.abort.signal }
+    }, grant.expiresAt, grant.slot)
+    return { caller: binding.caller, signal: grant.abort.signal }
   }
 
-  async bindAdmin(extensionId: string, generation: string, context: { projectId: string; sessionId?: string }): Promise<ExtensionCaller> {
+  async bindAdmin(extensionId: string, generation: string, context: { projectId: string; sessionId?: string }): Promise<{ caller: ExtensionCaller; signal: AbortSignal }> {
     if (!this.baseUrl) throw new ExtensionAccessError(403, 'Caller binding unavailable')
     this.sweepIfDue()
     if (!path.isAbsolute(context.projectId)) throw new ExtensionAccessError(403, 'Invalid view context')
     let projectId: string
-    try { projectId = fs.realpathSync(context.projectId) } catch { throw new ExtensionAccessError(403, 'Invalid view context') }
-    if (!fs.existsSync(path.join(projectId, '.halo', 'halo.db'))) throw new ExtensionAccessError(403, 'Invalid view context')
+    try { projectId = this.project(context.projectId) } catch { throw new ExtensionAccessError(403, 'Invalid view context') }
+    const cacheKey = JSON.stringify([extensionId, generation, 'admin', projectId, context.sessionId])
+    const existingId = this.bindingKeys.get(cacheKey)
+    const existing = existingId ? this.bindings.get(existingId) : undefined
+    if (existing?.abort && !existing.abort.signal.aborted) return { caller: existing.caller, signal: existing.abort.signal }
+    if (!fs.existsSync(path.join(projectId, '.halo', 'halo.db')) || this.stopped.has(slotKey(projectId, context.sessionId ?? ''))) throw new ExtensionAccessError(403, 'Invalid view context')
     const slot = context.sessionId ? this.slot(projectId, context.sessionId) : undefined
     const epoch = slot?.epoch
     const bindingEpoch = this.bindingEpoch
-    const identity = slot ? await this.entitlement(slot) : undefined
-    if (bindingEpoch !== this.bindingEpoch) throw new ExtensionAccessError(403, 'Caller binding unavailable')
-    if (slot && (!identity || slot.epoch !== epoch || slot.stopped)) throw new ExtensionAccessError(403, 'Invalid view context')
-    const cacheKey = JSON.stringify([extensionId, generation, 'admin', projectId, context.sessionId, slot?.userTurnId])
-    return this.bind(cacheKey, extensionId, generation, {
-      kind: 'admin', bindingId: crypto.randomUUID(), projectId,
-      ...(identity ? { sessionId: identity.sessionId, rootSessionId: identity.rootSessionId, agentId: identity.agentId } : {}),
-      userTurnId: slot?.userTurnId ?? null,
-    }, Date.now() + EXTENSION_ACCESS_TTL_MS)
+    if (slot) this.reference(slot, 1)
+    try {
+      const identity = slot ? await this.entitlement(slot) : undefined
+      if (bindingEpoch !== this.bindingEpoch) throw new ExtensionAccessError(403, 'Caller binding unavailable')
+      if (slot && (!identity || slot.epoch !== epoch)) throw new ExtensionAccessError(403, 'Invalid view context')
+      const binding = this.bind(cacheKey, extensionId, generation, {
+        kind: 'admin', bindingId: crypto.randomUUID(), projectId,
+        ...(identity ? { sessionId: identity.sessionId, rootSessionId: identity.rootSessionId, agentId: identity.agentId } : {}),
+        userTurnId: slot?.userTurnId ?? null,
+      }, Date.now() + EXTENSION_ACCESS_TTL_MS, slot)
+      return { caller: binding.caller, signal: binding.abort!.signal }
+    } finally { if (slot) this.reference(slot, -1) }
   }
 
-  private bind(cacheKey: string, extensionId: string, generation: string, caller: ExtensionCaller, expiresAt: number): ExtensionCaller {
+  private bind(cacheKey: string, extensionId: string, generation: string, caller: ExtensionCaller, expiresAt: number, slot?: Slot): Binding {
     const existingId = this.bindingKeys.get(cacheKey)
     const existing = existingId ? this.bindings.get(existingId) : undefined
-    if (existing) return existing.caller
-    if (!generation || this.bindings.size >= MAX_ENTRIES) throw new ExtensionAccessError(403, 'Caller binding unavailable')
-    this.bindings.set(caller.bindingId, { extensionId, generation, caller, expiresAt, cacheKey })
+    if (existing) return existing
+    if (!generation) throw new ExtensionAccessError(403, 'Caller binding unavailable')
+    if (this.bindings.size >= MAX_ENTRIES) throw new ExtensionAccessError(503, 'Extension access unavailable: binding capacity reached')
+    const binding: Binding = { extensionId, generation, caller, expiresAt, cacheKey, slot,
+      ...(caller.kind === 'admin' ? { abort: new AbortController(), connectionExpiresAt: expiresAt } : {}),
+    }
+    this.bindings.set(caller.bindingId, binding)
+    this.expiryDirty = true
     this.bindingKeys.set(cacheKey, caller.bindingId)
+    if (slot) this.reference(slot, 1)
     this.schedule()
-    return caller
+    return binding
   }
 
   getBinding(extensionId: string, generation: string, bindingId: string): ExtensionCaller | null {
@@ -239,49 +295,58 @@ export class ExtensionSessionAccess {
     const deadline = Date.parse(expiresAt)
     if (!caller || !Number.isFinite(deadline) || deadline <= Date.now() || deadline > Date.now() + EXTENSION_NOTICE_LIMITS.maxTtlMs) return false
     const b = this.bindings.get(bindingId)!
-    b.expiresAt = Math.max(b.expiresAt, deadline)
-    this.schedule()
+    if (deadline > b.expiresAt) { b.expiresAt = deadline; this.expiryDirty = true; this.schedule() }
     return true
   }
 
   acceptAdminInput(projectId: string, sessionId: string): string {
+    const marker = crypto.randomUUID()
+    if (!this.baseUrl) return marker
     this.sweepIfDue()
-    projectId = fs.realpathSync(projectId)
+    projectId = this.project(projectId)
+    // Ordinary chat must not fail when all extension slots are in use. There
+    // is no live caller to update if this session has never obtained a slot.
+    if (!this.slots.has(slotKey(projectId, sessionId)) && this.slots.size >= MAX_ENTRIES && !this.idleSlots.size) return marker
     const slot = this.slot(projectId, sessionId)
-    slot.userTurnId = crypto.randomUUID()
+    slot.userTurnId = marker
     slot.epoch++ // fence a shell-context load already awaiting metadata
+    if (slot.references === 0) return marker
     this.dropGrants((g) => g.slot === slot)
     // Existing notice bindings survive input/expiry; their live marker is a
     // takeover fence, NOT new authority for any old bearer.
     for (const b of this.bindings.values()) {
       if (b.caller.projectId !== projectId || b.caller.sessionId !== sessionId) continue
-      b.caller = { ...b.caller, userTurnId: slot.userTurnId }
-      this.emit(b, { type: 'halo:caller:updated', bindingId: b.caller.bindingId, userTurnId: slot.userTurnId })
+      b.caller = { ...b.caller, userTurnId: marker }
+      this.emit(b, { type: 'halo:caller:updated', bindingId: b.caller.bindingId, userTurnId: marker })
     }
     this.schedule()
-    return slot.userTurnId
+    return marker
   }
 
   revokeSession(projectId: string, sessionId: string, reason: ExtensionCallerRevocationReason): void {
     if (!this.baseUrl) return
-    try { projectId = fs.realpathSync(projectId) } catch { projectId = path.resolve(projectId) }
-    const slot = this.slot(projectId, sessionId)
-    if (reason === 'session-stopped' || reason === 'session-deleted') slot.stopped = true
-    this.revokeSlot(slot, reason)
+    try { projectId = this.project(projectId) } catch { projectId = path.resolve(projectId) }
+    const key = slotKey(projectId, sessionId)
+    if (reason === 'session-stopped' || reason === 'session-deleted') this.stopped.add(key)
+    const slot = this.slots.get(key)
+    if (slot) this.revokeSlot(slot, reason)
     this.schedule()
   }
 
   /** Called on an actual resumed run, never on model construction/release. */
   resumeSession(projectId: string, sessionId: string): void {
     if (!this.baseUrl) return
-    projectId = fs.realpathSync(projectId)
-    const slot = this.slots.get(slotKey(projectId, sessionId))
-    if (slot?.stopped) { slot.stopped = false; slot.entitlement = undefined }
+    projectId = this.project(projectId)
+    const key = slotKey(projectId, sessionId)
+    if (this.stopped.delete(key)) {
+      const slot = this.slots.get(key)
+      if (slot) slot.entitlement = undefined
+    }
   }
 
   invalidateSkills(projectId: string | null): void {
     if (projectId) {
-      try { projectId = fs.realpathSync(projectId) } catch { projectId = path.resolve(projectId) }
+      try { projectId = this.project(projectId) } catch { projectId = path.resolve(projectId) }
     }
     // One pass per collection, not revokeSlot's scan once per session. A
     // global skill edit must stay linear when many sessions hold grants.
@@ -325,7 +390,7 @@ export class ExtensionSessionAccess {
     slot.entitlement = undefined
     this.dropGrants((g) => g.slot === slot)
     for (const b of [...this.bindings.values()]) {
-      if (b.caller.projectId === slot.projectId && b.caller.sessionId === slot.sessionId) this.dropBinding(b, reason)
+      if (b.slot === slot) this.dropBinding(b, reason)
     }
   }
 
@@ -333,28 +398,43 @@ export class ExtensionSessionAccess {
     for (const g of this.grants.values()) {
       if (!predicate(g)) continue
       this.grants.delete(g.digest)
+      this.expiryDirty = true
       if (g.slot.issued.get(g.extensionId)?.grant === g) g.slot.issued.delete(g.extensionId)
+      this.reference(g.slot, -1)
       g.abort.abort()
     }
   }
 
   private dropBinding(b: Binding, reason?: ExtensionCallerRevocationReason): void {
     this.bindings.delete(b.caller.bindingId)
-    this.bindingKeys.delete(b.cacheKey)
+    this.expiryDirty = true
+    if (this.bindingKeys.get(b.cacheKey) === b.caller.bindingId) this.bindingKeys.delete(b.cacheKey)
+    if (b.slot) this.reference(b.slot, -1)
+    b.abort?.abort()
     if (reason) this.emit(b, { type: 'halo:caller:revoked', bindingId: b.caller.bindingId, reason })
   }
 
   private sweepIfDue(): void {
     if (Date.now() < this.nextExpiry) return
     this.dropGrants((g) => g.expiresAt <= Date.now())
-    for (const b of this.bindings.values()) if (b.expiresAt <= Date.now()) this.dropBinding(b)
+    for (const b of this.bindings.values()) {
+      if (b.connectionExpiresAt !== undefined && b.connectionExpiresAt <= Date.now()) {
+        b.connectionExpiresAt = undefined
+        this.expiryDirty = true
+        if (this.bindingKeys.get(b.cacheKey) === b.caller.bindingId) this.bindingKeys.delete(b.cacheKey)
+        b.abort!.abort()
+      }
+      if (b.expiresAt <= Date.now()) this.dropBinding(b)
+    }
     this.schedule()
   }
 
   private schedule(): void {
+    if (!this.expiryDirty) return
+    this.expiryDirty = false
     let next = Infinity
     for (const g of this.grants.values()) next = Math.min(next, g.expiresAt)
-    for (const b of this.bindings.values()) next = Math.min(next, b.expiresAt)
+    for (const b of this.bindings.values()) next = Math.min(next, b.expiresAt, b.connectionExpiresAt ?? Infinity)
     if (next === this.nextExpiry) return
     if (this.timer) clearTimeout(this.timer)
     this.nextExpiry = next
@@ -368,10 +448,15 @@ export class ExtensionSessionAccess {
     this.dropGrants(() => true)
     for (const b of [...this.bindings.values()]) this.dropBinding(b, 'shutdown')
     this.slots.clear()
+    this.idleSlots.clear()
+    this.projectSlots.clear()
+    this.stopped.clear()
+    this.projects.clear()
     this.watchers.close()
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
     this.nextExpiry = Infinity
+    this.expiryDirty = false
     this.listeners.clear()
   }
 }

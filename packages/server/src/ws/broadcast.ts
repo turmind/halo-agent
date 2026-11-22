@@ -17,6 +17,7 @@
  * server pushes the new state when it changes, client reducer applies
  * the diff. Same UX, ~zero idle traffic.
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import type { WebSocketServer, WebSocket } from 'ws'
 import type { WsServerMessage } from '@turmind/halo-core/protocol'
@@ -67,9 +68,8 @@ export function broadcast(event: WsServerMessage): void {
  * For events whose meaning is per-workspace: a git write in workspace A tells
  * a browser showing workspace B nothing, yet the unconditional broadcast made
  * it refetch status + ignored + log (3 API calls per connected tab, per op).
- * Paths are compared after `path.resolve` — the client's projectId and the
- * route's projectPath are both absolute paths from the same admin contract,
- * but may differ in trailing separator.
+ * The socket's workspace is canonicalized once on bind; notice envelopes use
+ * that same identity. Other route targets are canonicalized once per broadcast.
  *
  * Falls back to the global broadcast when no resolver is registered (the
  * AgentCore A2A mode never calls `setBroadcastWss`, so this is a no-op there;
@@ -84,7 +84,12 @@ export function broadcastToWorkspace(workspacePath: string, event: WsServerMessa
     if (event.type.startsWith('extension:notice')) return
     return broadcast(event)
   }
-  const target = path.resolve(workspacePath)
+  let target = path.resolve(workspacePath)
+  // Notice broker already supplies canonical paths. Other routes may receive
+  // an older Admin bookmark containing a symlink; resolve once, not per socket.
+  if (!event.type.startsWith('extension:notice')) {
+    try { target = fs.realpathSync(target) } catch { /* deleted workspace: retain its last path */ }
+  }
   const payload = JSON.stringify(event)
   for (const client of _wss.clients) {
     const ws = client as WebSocket

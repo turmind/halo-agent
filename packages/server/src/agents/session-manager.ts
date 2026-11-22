@@ -2544,14 +2544,19 @@ export class SessionManager implements SessionManagerInternals {
     }
   }
 
+  private revokeStoppedTree(sessionId: string): string[] {
+    // Both Stop entry points cover offline descendants too. stoppedAt cannot
+    // fence extension access: normal child auto-report also writes that field.
+    const allIds = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
+    for (const id of allIds) extensionSessionAccess.revokeSession(this.workspaceRoot, id, 'session-stopped')
+    return allIds
+  }
+
   async stopSession(sessionId: string): Promise<void> {
+    const allIds = this.revokeStoppedTree(sessionId)
     // An owed inbound A2A task ends CANCELED, before the abort's turn-end hook
     // could report the partial output as completed.
     cancelOwedForSession(this.db, sessionId, 'stop')
-    // Collect the full descendant tree so stop cascades — otherwise sub-agents
-    // started via start_session keep burning tokens after the parent is stopped.
-    const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
-    for (const id of allIds) extensionSessionAccess.revokeSession(this.workspaceRoot, id, 'session-stopped')
 
     const now = Date.now()
     for (const id of allIds) {
@@ -3901,6 +3906,7 @@ export class SessionManager implements SessionManagerInternals {
    *  on the next wake-up. Mirrors stopSession's fold — a stop parks the work, it
    *  doesn't discard it. */
   stopUserSession(sessionId: string): void {
+    this.revokeStoppedTree(sessionId)
     // The admin Stop button: same A2A outcome as stopSession (CANCELED).
     cancelOwedForSession(this.db, sessionId, 'stop')
     const session = this.sessions.get(sessionId)

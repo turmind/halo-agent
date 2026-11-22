@@ -6,6 +6,7 @@
  * - Sends WS notifications when events arrive (via listener)
  * - Manages terminal and file-watcher lifecycles
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import type { WebSocket, WebSocketServer } from 'ws'
 import type { WsClientMessage, WsServerMessage } from '@turmind/halo-core/protocol'
@@ -61,6 +62,7 @@ interface ConnectedClient {
    *  only ever subscribes root ids. */
   subscriptions: Map<string, () => void>
   projectId: string | null
+  workspacePath: string | null
   sessionManager: SessionManager | null
   agentId: string
   terminalManager: TerminalManager
@@ -89,7 +91,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
   // parallel ws→client Map that add/remove would have to keep in sync.
   setClientWorkspaceResolver((ws) => {
     for (const c of clients) {
-      if (c.ws === ws) return c.projectId
+      if (c.ws === ws) return c.workspacePath
     }
     return null
   })
@@ -285,8 +287,10 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
    *  `sessionManager` afterwards. */
   function setClientProject(client: ConnectedClient, projectId: string): void {
     if (client.projectId === projectId) return
+    const workspacePath = path.isAbsolute(projectId) ? fs.realpathSync(projectId) : null
     for (const sid of [...client.subscriptions.keys()]) unsubscribeSession(client, sid)
     client.projectId = projectId
+    client.workspacePath = workspacePath
   }
 
   /**
@@ -359,6 +363,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       ws,
       subscriptions: new Map(),
       projectId: null,
+      workspacePath: null,
       sessionManager: null,
       agentId: 'default',
       terminalManager,
@@ -442,8 +447,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         try {
           switch (msg.type) {
             case 'extension:notice:respond': {
-              const projectId = client.projectId && resolveProjectPath(client.projectId)
-              if (deps.extensionNotices) sendJson(ws, deps.extensionNotices.respond(projectId ? path.resolve(projectId) : null, msg))
+              if (deps.extensionNotices) sendJson(ws, deps.extensionNotices.respond(client.workspacePath, msg))
               break
             }
             case 'chat':
@@ -457,8 +461,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
               break
             case 'subscribe': {
               await handleSubscribe(client, msg)
-              const projectId = client.projectId && resolveProjectPath(client.projectId)
-              if (projectId && deps.extensionNotices) sendJson(ws, deps.extensionNotices.snapshot(path.resolve(projectId)))
+              if (client.workspacePath && deps.extensionNotices) sendJson(ws, deps.extensionNotices.snapshot(client.workspacePath))
               break
             }
             case 'unsubscribe':
@@ -814,15 +817,8 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       const sm = client.sessionManager
       if (!sm || !sid) return
 
-      // Manual /compact has no turn in flight — cancelling the compact is the
-      // whole stop. An auto-compact runs inside a turn (beforeCallModel or the
-      // turn-end check) and is not cancellable: stopUserSession aborts the
-      // turn, which exits once the compact finishes.
-      if (sm.isSessionCompacting(sid) && !sm.isSessionRunning(sid)) {
-        sm.cancelCompact(sid)
-        sendJson(ws, { type: 'chat:stopped', sessionId: sid })
-        return
-      }
+      // Use the lifecycle boundary even for manual compact / offline sessions:
+      // it revokes extension callers before cancelling or aborting work.
       sm.stopUserSession(sid)
       sendJson(ws, { type: 'chat:stopped', sessionId: sid })
       saveSession(client, sid)

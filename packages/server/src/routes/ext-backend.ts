@@ -60,8 +60,8 @@ async function callerHeaders(auth: Auth, id: string, generation: string): Promis
     return { headers: { [EXTENSION_CALLER_HEADER]: Buffer.from(JSON.stringify(caller)).toString('base64url') }, signal }
   }
   if (!auth.context) return { headers: {} } // legacy voice-input/htrans
-  const caller = await extensionSessionAccess.bindAdmin(id, generation, auth.context)
-  return { headers: { [EXTENSION_CALLER_HEADER]: Buffer.from(JSON.stringify(caller)).toString('base64url') } }
+  const { caller, signal } = await extensionSessionAccess.bindAdmin(id, generation, auth.context)
+  return { headers: { [EXTENSION_CALLER_HEADER]: Buffer.from(JSON.stringify(caller)).toString('base64url') }, signal }
 }
 
 function forwardHeaders(src: Iterable<[string, string]>, id: string): Record<string, string> {
@@ -197,7 +197,7 @@ export function createExtBackendUpgrade(backends: ExtensionBackends = extensionB
         up.end()
       } catch (err) { release(); throw err }
     })().catch((err: unknown) => {
-      if (err instanceof ExtensionAccessError) return reject(socket, err.status === 401 ? '401 Unauthorized' : '403 Forbidden')
+      if (err instanceof ExtensionAccessError) return reject(socket, err.status === 503 ? '503 Service Unavailable' : err.status === 401 ? '401 Unauthorized' : '403 Forbidden')
       if (err instanceof BackendUnconfirmedError) return reject(socket, '403 Forbidden')
       reject(socket, '502 Bad Gateway')
     })

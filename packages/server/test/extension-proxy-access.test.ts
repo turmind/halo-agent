@@ -175,6 +175,36 @@ describe('extension proxy session auth', () => {
     now.mockRestore()
     await closed
   })
+  it('returns explicit HTTP/WS unavailable on binding capacity without evicting existing callers', async () => {
+    const auth = await authorization()
+    const first = broker.bindSession('browser', 'generation-0', auth).caller
+    for (let i = 1; i < 4096; i++) broker.bindSession('browser', `generation-${i}`, auth)
+    const res = await app.request('/api/ext/browser/echo', { headers: { authorization: auth } })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ error: 'Extension access unavailable: binding capacity reached' })
+    expect(await wsStatus({ authorization: auth })).toBe(503)
+    expect(broker.getBinding('browser', 'generation-0', first.bindingId)).toEqual(first)
+    expect(() => broker.validate('browser', auth)).not.toThrow()
+  })
+  it('Admin binding expiry closes live HTTP/WS and reconnect obtains a new caller', async () => {
+    const context = encode({ projectId: dir, sessionId: 's1' })
+    const { ws, payload } = await wsResult({ cookie }, `?_halo_context=${context}`)
+    const caller = decode(payload.headers['x-halo-caller'])
+    const pending = fetch(`${base}/api/ext/browser/hold`, { headers: { cookie, 'x-halo-view-context': context } })
+    await vi.waitFor(() => expect(holds.size).toBe(1))
+    const closed = new Promise((resolve) => ws.once('close', resolve))
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + EXTENSION_ACCESS_TTL_MS + 1)
+    expect(broker.getBinding('browser', 'generation-fixture', caller.bindingId)).toBeNull()
+    now.mockRestore()
+    await closed
+    expect((await pending).status).toBe(502)
+    await vi.waitFor(() => expect(holds.size).toBe(0))
+    const fresh = await wsResult({ cookie }, `?_halo_context=${context}`)
+    expect(decode(fresh.payload.headers['x-halo-caller']).bindingId).not.toBe(caller.bindingId)
+    const stopped = new Promise((resolve) => fresh.ws.once('close', resolve))
+    broker.revokeSession(dir, 's1', 'session-stopped')
+    await stopped
+  })
   it('WS cookie view context is non-secret routing; cross-origin/invalid bearer never passes', async () => {
     expect(await wsStatus({ cookie, origin: 'https://other.example' })).toBe(403)
     expect(await wsStatus({ cookie, authorization: 'Bearer wrong' })).toBe(401)
