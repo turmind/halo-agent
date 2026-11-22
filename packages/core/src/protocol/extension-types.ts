@@ -9,6 +9,8 @@
  * validator — the admin trusts what arrives here.
  */
 
+import type { ExtensionCanvasDeclaration } from './extension-notices.js'
+
 /** Manifest `capabilities` values the host understands. Unknown values are a
  *  manifest error on the server, so this union is exhaustive on the wire.
  *  `media` = iframe gets `allow="microphone; display-capture; clipboard-write"`;
@@ -108,7 +110,7 @@ export interface ExtensionInfo {
   version: string
   description?: string
   /** Lower-case file extensions including the dot, e.g. `['.glb']`. Empty
-   *  only for an `activity` / `chatbar` extension that opens no files. */
+   *  only for an `activity` / `chatbar` / `canvas` extension that opens no files. */
   extensions: string[]
   /** HTML entry relative to the extension directory. */
   entry: string
@@ -125,6 +127,8 @@ export interface ExtensionInfo {
   activity?: ExtensionActivity
   /** Chat-input toolbar button; absent = none. */
   chatbar?: ExtensionChatbar
+  /** File-less main Canvas view; absent = none. */
+  canvas?: ExtensionCanvasDeclaration
   /** Server-side process; absent = static only (the iframe is all there is). */
   backend?: ExtensionBackend
   homepage?: string

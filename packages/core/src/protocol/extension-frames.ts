@@ -11,6 +11,7 @@
  * (.halo/tmp/canvas-extensions-design.md).
  */
 import type { ExtensionCapability, ExtensionPlatform } from './extension-types.js'
+import type { ExtensionCanvasInitFrame, ExtensionFocusChatFrame } from './extension-notices.js'
 
 export const EXTENSION_PROTOCOL_VERSION = 1
 
@@ -53,6 +54,7 @@ export type ExtensionPickErrorCode = 'cancelled' | 'denied'
 // ── Host → Extension ─────────────────────────────────────────────────
 
 export type ExtensionHostFrame =
+  | ExtensionCanvasInitFrame
   // sent once, right after the extension's `ready`. `view` says which host
   // mounted it: `'file'` = an editor tab with an open file / bundle (the
   // fields below); `'activity'` = the activity-bar page — no file, so no
@@ -151,6 +153,7 @@ export type ExtensionHostFrame =
 // ── Extension → Host ─────────────────────────────────────────────────
 
 export type ExtensionClientFrame =
+  | ExtensionFocusChatFrame
   // script loaded and listening; the host waits for this before `init`
   | (ExtensionFrameBase & { type: 'ready'; protocol: number })
   // for a bundle extension: "busy (e.g. recording) — don't drop me"

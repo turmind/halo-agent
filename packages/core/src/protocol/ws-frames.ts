@@ -12,11 +12,14 @@
  */
 import type { SessionMessage } from './session-message.js'
 import type { ExtensionsSnapshot } from './extension-types.js'
+import type { ExtensionNoticeRespondFrame, ExtensionNoticeServerFrame } from './extension-notices.js'
 import type { CoreUpdateStatus, ExtensionsUpdateStatus } from './update-types.js'
 
 // ── Client → Server ──────────────────────────────────────────────────
 
-export interface WsClientMessage {
+export type WsClientMessage = WsLegacyClientMessage | ExtensionNoticeRespondFrame
+
+interface WsLegacyClientMessage {
   /** `__ping__` is the app-level liveness probe (answered with `__pong__`);
    *  the rest are routed by handler.ts's top-level `switch (msg.type)`. */
   type: '__ping__' | 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | 'unsubscribe' | `command:${string}` | 'session:delete' | 'exchange:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
@@ -168,6 +171,7 @@ export type WsServerMessage =
   | { type: 'evolution:apply_changed'; id: string; status?: string; kind?: 'deleted' }
   // ~/.halo/global/extensions/ changed (install / upgrade / uninstall) — full snapshot, not a diff
   | ({ type: 'extension:changed' } & ExtensionsSnapshot)
+  | ExtensionNoticeServerFrame
   // ~/.halo/global/models.d/ changed (hub provider configs installed / removed) — re-fetch /agent-configs/models
   | { type: 'models:changed' }
   // An update check finished (or started) — full status of that scope, not a diff
