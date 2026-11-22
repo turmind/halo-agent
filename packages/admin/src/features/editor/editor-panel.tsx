@@ -17,6 +17,7 @@ import { FilePreview, canPreview, isBundleName, isHeavyPreview, loadExtensions, 
 import { getExtensionHost } from './previews/extension-host-logic'
 import { isContentChange, tabRefresh, versionedUrl } from './file-refresh'
 import { ImmersivePane, ImmersiveScope, armImmersiveFullscreen, useImmersive } from './immersive'
+import { useFileUpload } from './use-file-upload'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
@@ -167,8 +168,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     originalPath?: string
     originalName?: string
   } | null>(null)
-  const [uploadProgress, setUploadProgress] = useState<{ count: number; progress: number } | null>(null)
-  const uploadAbortRef = useRef<AbortController | null>(null)
+  const { upload: handleDropFiles, uploadBar } = useFileUpload(projectId)
   // Scroll container around this instance's <FileTree> — scopes the keyboard
   // handler (multiple EditorPanels can be mounted — main Explorer, Skills,
   // Agents — a global DOM marker can't tell them apart) and is the query
@@ -667,33 +667,6 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     setDiffByGroup((prev) => ({ ...prev, [groupId]: null }))
   }, [])
 
-  const handleDropFiles = useCallback(
-    async (files: File[], targetDir: string) => {
-      if (!projectId) return
-      const controller = new AbortController()
-      uploadAbortRef.current = controller
-      setUploadProgress({ count: files.length, progress: 0 })
-      try {
-        await api.files.upload(files, projectId, targetDir || undefined, (loaded, total) => {
-          if (total > 0) {
-            setUploadProgress((prev) => prev ? { ...prev, progress: (loaded / total) * 100 } : null)
-          }
-        }, controller.signal)
-        setUploadProgress((prev) => prev ? { ...prev, progress: 100 } : null)
-        setTimeout(() => setUploadProgress(null), 400)
-        loadFileTree(projectId, useEditorStore)
-      } catch (err) {
-        setUploadProgress(null)
-        if (err instanceof DOMException && err.name === 'AbortError') return
-        console.error('[EditorPanel] Upload failed:', err)
-        window.alert(err instanceof Error ? err.message : 'Upload failed')
-      } finally {
-        uploadAbortRef.current = null
-      }
-    },
-    [projectId],
-  )
-
   const handleMoveFile = useCallback(
     async (oldPath: string, newDir: string) => {
       if (!projectId) return
@@ -1166,31 +1139,6 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [tree, selectedPaths, lastAnchor, pendingEdit, handleFileSelect, handleSelectionChange])
-
-  const uploadBar = uploadProgress && (
-    <div className="shrink-0 border-b border-[var(--border)] bg-[var(--card)] px-3 py-1.5">
-      <div className="flex items-center justify-between text-[10px] text-[var(--muted-foreground)]">
-        <span>Uploading {uploadProgress.count} file{uploadProgress.count > 1 ? 's' : ''}...</span>
-        <span className="flex items-center gap-1.5">
-          {Math.round(uploadProgress.progress)}%
-          <button
-            type="button"
-            onClick={() => uploadAbortRef.current?.abort()}
-            className="rounded p-0.5 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-            title="Cancel upload"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </span>
-      </div>
-      <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--secondary)]">
-        <div
-          className="h-full rounded-full bg-[var(--primary)] transition-all duration-150"
-          style={{ width: `${uploadProgress.progress}%` }}
-        />
-      </div>
-    </div>
-  )
 
   // Tree-only mode: render just the file tree (used in Explorer sidebar)
   if (mode === 'tree-only') {

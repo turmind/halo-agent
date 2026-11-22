@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { EditorPanel } from '@/features/editor/editor-panel'
+import { useFileUpload } from '@/features/editor/use-file-upload'
 import { isBundleName } from '@/features/editor/previews/FilePreview'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { collapseAllPaths } from '@/features/explorer/file-tree'
@@ -33,6 +34,7 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
   const [loading, setLoading] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const uploadRef = useRef<HTMLInputElement>(null)
+  const { upload, uploadBar } = useFileUpload(projectId)
 
   // Recent-workspaces dropdown: focus shows the full MRU list (A), typing filters
   // it (B). `typed` distinguishes the two — on focus the input still holds the
@@ -97,14 +99,7 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     if (!projectId || !e.target.files?.length) return
-    const files = Array.from(e.target.files)
-    try {
-      await api.files.upload(files, projectId)
-      loadFileTree(projectId)
-    } catch (err) {
-      console.error('[Explorer] Upload failed:', err)
-      window.alert(err instanceof Error ? err.message : 'Upload failed')
-    }
+    await upload(Array.from(e.target.files))
     e.target.value = ''
   }
 
@@ -222,6 +217,7 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
           </div>
         </div>
       )}
+      {uploadBar}
       <div className="flex-1 overflow-y-auto">
         {projectId ? (
           <EditorPanel projectId={projectId} mode="tree-only" />
