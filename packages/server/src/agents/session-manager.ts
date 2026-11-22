@@ -31,6 +31,7 @@ import { sweepInterruptedRuns } from './run-ledger.js'
 import { resolveWorkingDir as resolveWorkingDirIn } from './working-dir.js'
 import { insertRunning, deleteRunning } from '../db/runs-db.js'
 import { isShuttingDown } from '../shutdown.js'
+import { extensionSessionAccess } from '../extensions/session-access.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
@@ -2014,6 +2015,7 @@ export class SessionManager implements SessionManagerInternals {
   ): Promise<string> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
+    extensionSessionAccess.resumeSession(this.workspaceRoot, sessionId)
     // `message` is the opening turn — a start_session / auto-report string, or
     // a user message's ContentBlock[] (sendUserMessage idle path). An empty
     // STRING means "the work is already in messageQueue" (querySession idle
@@ -2549,6 +2551,7 @@ export class SessionManager implements SessionManagerInternals {
     // Collect the full descendant tree so stop cascades — otherwise sub-agents
     // started via start_session keep burning tokens after the parent is stopped.
     const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
+    for (const id of allIds) extensionSessionAccess.revokeSession(this.workspaceRoot, id, 'session-stopped')
 
     const now = Date.now()
     for (const id of allIds) {
@@ -2794,14 +2797,17 @@ export class SessionManager implements SessionManagerInternals {
     }
 
     if (accessLevel !== undefined && accessLevel !== session.accessLevel) {
+      extensionSessionAccess.revokeSession(this.workspaceRoot, sessionId, 'access-changed')
       session.accessLevel = accessLevel
+      // Commit the authoritative level before the async rebuild; an old
+      // full tool closure may still run while model construction awaits I/O.
+      this.db.update(agentSessions).set({ accessLevel }).where(eq(agentSessions.id, sessionId)).run()
       const savedMessages = session.agent.messages
       const { agent, modelId, systemPrompt } = await this.buildAgentInstance(session.agentId, sessionId, session.parentId, session.workingDir ?? undefined, accessLevel)
       session.agent = agent
       session.agent.messages = savedMessages
       session.currentModelId = modelId
       session.systemPrompt = systemPrompt
-      this.db.update(agentSessions).set({ accessLevel }).where(eq(agentSessions.id, sessionId)).run()
     }
 
     // Resume a stopped session when the user sends a new message
@@ -3666,6 +3672,8 @@ export class SessionManager implements SessionManagerInternals {
    */
   async deleteSession(sessionId: string): Promise<string[]> {
     cancelOwedForSession(this.db, sessionId, 'delete')
+    const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
+    for (const id of allIds) extensionSessionAccess.revokeSession(this.workspaceRoot, id, 'session-deleted')
     // Stop if running
     const session = this.sessions.get(sessionId)
     if (session) {
@@ -3682,9 +3690,7 @@ export class SessionManager implements SessionManagerInternals {
       this.sessions.delete(sessionId)
     }
 
-    // Collect all descendant session IDs (one range query), then stop the
-    // in-memory children
-    const allIds: string[] = [sessionId, ...this.queryStore.listDescendantIds(sessionId)]
+    // Stop the descendants collected before awaiting the parent.
     for (const id of allIds.slice(1)) {
       const childSession = this.sessions.get(id)
       if (childSession) {

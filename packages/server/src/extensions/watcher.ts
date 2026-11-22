@@ -18,6 +18,7 @@
  */
 import fs, { type FSWatcher } from 'node:fs'
 import { broadcast } from '../ws/broadcast.js'
+import { extensionSessionAccess } from './session-access.js'
 import { extensionBackends } from './backend.js'
 import { rejudgeExtensionUpdates } from '../updates/extension-check.js'
 import { extensionsRoot, getSnapshot, removeStaleStagingDirs, scanExtensions, snapshotKey } from './registry.js'
@@ -40,6 +41,7 @@ function scheduleFlush(): void {
  *  themselves, the watcher path is the single notifier. */
 export function rescanAndBroadcast(): void {
   const snap = scanExtensions()
+  if (snapshotKey(snap) !== lastKey) extensionSessionAccess.invalidateExtension()
   // A removed / switched-off / updated extension's backend stops now (an
   // update's new version starts on its next request).
   extensionBackends.reconcile(snap)
@@ -52,7 +54,10 @@ export function rescanAndBroadcast(): void {
 
 function openWatcher(root: string): void {
   try {
-    watcher = fs.watch(root, { persistent: false, recursive: false }, () => scheduleFlush())
+    watcher = fs.watch(root, { persistent: false, recursive: false }, () => {
+      extensionSessionAccess.invalidateExtension()
+      scheduleFlush()
+    })
     // Async 'error' (root removed, EPERM on Windows) without a listener would
     // reach the global uncaughtException handler and leave us silently stale.
     // Close and retry once a second — the root gets recreated by the next

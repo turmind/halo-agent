@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono'
+import { extensionSessionAccess } from '../extensions/session-access.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homedir } from 'node:os'
@@ -363,6 +364,7 @@ export function createAgentConfigRoutes() {
       'utf-8',
     )
 
+    extensionSessionAccess.invalidateSkills(scope === 'workspace' ? body.projectId! : null)
     const agent: AgentMeta = { id, name: body.name, description: body.description ?? '', model: (scaffoldModel.id as string | undefined) ?? '', path: agentDir, scope, priority: 0 }
     return c.json({ agent, conflictScope }, 201)
   })
@@ -433,6 +435,7 @@ export function createAgentConfigRoutes() {
     }
 
     await writeFileAtomic(yamlPath, body.yaml)
+    extensionSessionAccess.invalidateSkills(scope === 'workspace' ? body.projectId! : null)
 
     // Return updated metadata
     const { name, description, model } = parseAgentYaml(body.yaml)
@@ -470,6 +473,7 @@ export function createAgentConfigRoutes() {
     // locks — it makes rm retry EBUSY/EPERM/ENOTEMPTY (the cross-platform way
     // to delete a directory tree). Without it, deleting an agent fails on Windows.
     await fs.rm(agentDir, { recursive: true, force: true })
+    extensionSessionAccess.invalidateSkills(scope === 'workspace' ? projectId! : null)
     return c.json({ ok: true })
   })
 
@@ -482,6 +486,7 @@ export function createAgentConfigRoutes() {
     if (!projectId) return c.json({ error: 'projectId required' }, 400)
     const { db } = getWorkspaceDb(projectId)
     const disabled = toggleDisabled(db, 'agent', id, scope)
+    extensionSessionAccess.invalidateSkills(projectId)
     return c.json({ ok: true, disabled })
   })
 

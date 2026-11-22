@@ -399,6 +399,7 @@ export const DEFAULT_HIDDEN_DIRS = [
   // skills/agents/prompts, so the sensitive subtrees are hidden explicitly).
   '~/.halo/global/internal-sessions',
   '~/.halo/global/logs',
+  '~/.halo/global/extension-data',
 ]
 export const DEFAULT_HIDDEN_FILES = [
   '~/.npmrc',
@@ -982,7 +983,10 @@ export function noSandboxMessage(reason: SandboxUnavailableReason | null = getSa
 
 /** `proxyEnv`: the command's outbound proxy vars — shell_exec passes the
  *  snapshot it also masks the output against; default = read now. */
-export async function sandboxExec(command: string, opts: SandboxOptions & { proxyEnv?: Record<string, string> }): Promise<SandboxResult> {
+export async function sandboxExec(command: string, opts: SandboxOptions & { proxyEnv?: Record<string, string>; env?: Record<string, string>; secrets?: string[] }): Promise<SandboxResult> {
+  // Windows normalizes workspace/readonly to full. That must not turn a
+  // non-full caller's optional context into an extension credential grant.
+  const shellEnv = opts.accessLevel === 'full' ? opts.env : undefined
   opts = normalizeOptsForPlatform(opts)
   const proxyEnv = opts.proxyEnv ?? outboundProxyEnv()
   // cmd syntax differs and Windows has no rm; the guard is POSIX-only.
@@ -997,7 +1001,7 @@ export async function sandboxExec(command: string, opts: SandboxOptions & { prox
       // hides chcp's own banner.
       const result = await execAsync(`chcp 65001 >nul 2>&1 & ${command}`, {
         cwd: opts.workspaceRoot,
-        env: cleanChildEnv(proxyEnv),
+        env: { ...cleanChildEnv(proxyEnv), ...shellEnv },
         timeout: opts.timeout,
         maxBuffer: opts.maxBuffer,
         signal: opts.signal,
@@ -1016,7 +1020,7 @@ export async function sandboxExec(command: string, opts: SandboxOptions & { prox
       timeout: opts.timeout,
       maxBuffer: opts.maxBuffer,
       signal: opts.signal,
-      env: cleanChildEnv(proxyEnv),
+      env: { ...cleanChildEnv(proxyEnv), ...shellEnv },
     })
   }
 

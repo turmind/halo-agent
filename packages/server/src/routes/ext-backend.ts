@@ -1,47 +1,72 @@
-/**
- * `/api/ext/<id>/*` — HTTP and WS forwarded to the extension's own backend
- * process (extensions/backend.ts starts it on the first request and stops it
- * when idle). The extension's iframe talks only to this prefix; the backend
- * sees the path after it (`/api/ext/voice-input/stream?x` → `/stream?x`),
- * with `X-Forwarded-Prefix: /api/ext/<id>`.
- *
- * Auth = the admin cookie: the HTTP route sits behind authMiddleware like the
- * rest of `/api`, and the WS handshake checks the same cookie as `/ws`. The
- * cookie is stripped before forwarding (a backend never needs the login), and
- * a backend's `Set-Cookie` is dropped (it must not set cookies on the admin
- * origin) — from HTTP responses and the WS 101 alike (DROP_RESPONSE).
- * Unknown, switched-off or backend-less extension → 404; a backend
- * no admin confirmed yet → 403 `{ code: 'backend-unconfirmed' }` (a WS just
- * gets the 403 status line — the browser can't read it, so an extension
- * whose socket never opened asks over HTTP to learn why); a backend that
- * can't start → 502 with the reason.
- *
- * Each in-flight request and each open WS counts as one user of the backend
- * (acquire / release, exactly once per request on every path), which is what
- * keeps it from idling out. A client that goes away cancels the upstream
- * request (HTTP: the request's abort signal; WS: its socket closing), so a
- * backend slow to answer can't hold a count — and the backend — forever.
- */
+/** HTTP / WS private-socket proxy. Only this exact subtree accepts session
+ * bearers; explicit Authorization never falls through to the Admin cookie.
+ * Acquire/release counts requests, not credentials or retained notice bindings. */
 import http, { type IncomingHttpHeaders, type IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { Readable } from 'node:stream'
 import { Hono, type Context } from 'hono'
+import {
+  EXTENSION_CALLER_HEADER, EXTENSION_VIEW_CONTEXT_HEADER, EXTENSION_VIEW_CONTEXT_QUERY,
+  type ExtensionViewContext,
+} from '@turmind/halo-core/protocol'
 import { getTokenFromCookieHeader, isAuthenticated } from '../middleware/auth.js'
+import { config } from '../config.js'
 import { isExtensionId } from '../extensions/registry.js'
 import { backendExtension, BackendUnconfirmedError, extensionBackends, type ExtensionBackends } from '../extensions/backend.js'
+import { extensionSessionAccess, ExtensionAccessError } from '../extensions/session-access.js'
 
 export const EXT_BACKEND_PREFIX = '/api/ext/'
-
-/** Hop-by-hop (RFC 9110 §7.6.1) plus what must not cross to / from a backend. */
 const DROP_REQUEST = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'host', 'cookie', 'authorization'])
 const DROP_RESPONSE = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'set-cookie'])
 const NULL_BODY_STATUS = new Set([101, 204, 205, 304])
-
 const errMsg = (err: unknown) => err instanceof Error ? err.message : String(err)
+
+type Auth = { authorization: string } | { context?: ExtensionViewContext }
+
+function authenticate(id: string, headers: Headers, url: URL, method: string, ws = false): Auth {
+  const authorization = headers.get('authorization')
+  if (authorization !== null) {
+    extensionSessionAccess.validate(id, authorization)
+    return { authorization }
+  }
+  if (!isAuthenticated(getTokenFromCookieHeader(headers.get('cookie') ?? undefined))) throw new ExtensionAccessError(401)
+  // Non-browser clients have no Origin. Browsers cannot omit it on WS or
+  // cross-origin writes. Do not trust a caller-supplied forwarding host.
+  const origin = headers.get('origin')
+  if (origin && (ws || !['GET', 'HEAD', 'OPTIONS'].includes(method))) {
+    let same = false
+    try {
+      const protocol = config.server.trustProxy
+        ? headers.get('x-forwarded-proto')?.split(',')[0].trim() || url.protocol.slice(0, -1)
+        : url.protocol.slice(0, -1)
+      same = new URL(origin).origin === `${protocol}://${headers.get('host') ?? url.host}`
+    } catch { /* malformed/opaque origin */ }
+    if (!same) throw new ExtensionAccessError(403, 'Cross-origin request denied')
+  }
+  const encoded = headers.get(EXTENSION_VIEW_CONTEXT_HEADER) ?? url.searchParams.get(EXTENSION_VIEW_CONTEXT_QUERY)
+  if (encoded === null) return {}
+  try {
+    if (encoded.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error()
+    const context: unknown = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
+    if (!context || typeof context !== 'object' || !('projectId' in context) || typeof context.projectId !== 'string') throw new Error()
+    if ('sessionId' in context && (typeof context.sessionId !== 'string' || !context.sessionId || context.sessionId.length > 1024)) throw new Error()
+    return { context: { projectId: context.projectId, ...('sessionId' in context ? { sessionId: context.sessionId as string } : {}) } }
+  } catch { throw new ExtensionAccessError(403, 'Invalid view context') }
+}
+
+async function callerHeaders(auth: Auth, id: string, generation: string): Promise<{ headers: Record<string, string>; signal?: AbortSignal }> {
+  if ('authorization' in auth) {
+    const { caller, signal } = extensionSessionAccess.bindSession(id, generation, auth.authorization)
+    return { headers: { [EXTENSION_CALLER_HEADER]: Buffer.from(JSON.stringify(caller)).toString('base64url') }, signal }
+  }
+  if (!auth.context) return { headers: {} } // legacy voice-input/htrans
+  const caller = await extensionSessionAccess.bindAdmin(id, generation, auth.context)
+  return { headers: { [EXTENSION_CALLER_HEADER]: Buffer.from(JSON.stringify(caller)).toString('base64url') } }
+}
 
 function forwardHeaders(src: Iterable<[string, string]>, id: string): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const [k, v] of src) if (!DROP_REQUEST.has(k.toLowerCase())) out[k] = v
+  for (const [k, v] of src) if (!DROP_REQUEST.has(k.toLowerCase()) && !k.toLowerCase().startsWith('x-halo-')) out[k] = v
   out['x-forwarded-prefix'] = `${EXT_BACKEND_PREFIX}${id}`
   return out
 }
@@ -55,7 +80,6 @@ function headerPairs(h: IncomingHttpHeaders): Array<[string, string]> {
   return out
 }
 
-/** `/api/ext/<id>[/rest][?q]` → `{ id, target: '/rest?q' }`, or null. */
 function splitTarget(rawUrl: string): { id: string; target: string } | null {
   if (!rawUrl.startsWith(EXT_BACKEND_PREFIX)) return null
   const after = rawUrl.slice(EXT_BACKEND_PREFIX.length)
@@ -63,34 +87,42 @@ function splitTarget(rawUrl: string): { id: string; target: string } | null {
   const id = cut < 0 ? after : after.slice(0, cut)
   if (!isExtensionId(id)) return null
   const rest = cut < 0 ? '' : after.slice(cut)
-  return { id, target: rest.startsWith('/') ? rest : `/${rest}` }
+  const target = new URL(rest.startsWith('/') ? `http://extension${rest}` : `http://extension/${rest}`)
+  if (target.searchParams.has(EXTENSION_VIEW_CONTEXT_QUERY)) target.searchParams.delete(EXTENSION_VIEW_CONTEXT_QUERY)
+  return { id, target: target.pathname + target.search }
 }
 
 export function createExtBackendRoutes(backends: ExtensionBackends = extensionBackends) {
   const app = new Hono()
-
   const handle = async (c: Context) => {
     const url = new URL(c.req.url)
     const split = splitTarget(url.pathname + url.search)
-    const ext = split ? backendExtension(split.id) : undefined
-    if (!split || !ext) return c.json({ error: 'Not found' }, 404)
+    if (!split) return c.json({ error: 'Not found' }, 404)
+    let auth: Auth
+    try { auth = authenticate(split.id, c.req.raw.headers, url, c.req.method) } catch (err) {
+      if (err instanceof ExtensionAccessError) return c.json({ error: err.message }, err.status)
+      throw err
+    }
+    const ext = backendExtension(split.id)
+    if (!ext) return c.json({ error: 'Not found' }, 404)
     let b
-    try {
-      b = await backends.acquire(ext)
-    } catch (err) {
+    try { b = await backends.acquire(ext) } catch (err) {
       if (err instanceof BackendUnconfirmedError) return c.json({ error: err.message, code: 'backend-unconfirmed' }, 403)
       return c.json({ error: `extension backend unavailable: ${errMsg(err)}` }, 502)
     }
-    const req = c.req.raw
-    const reqHeaders: Array<[string, string]> = []
-    req.headers.forEach((v, k) => { reqHeaders.push([k, v]) })
     let released = false
     const release = () => { if (!released) { released = true; backends.release(b) } }
     try {
+      // B supplies the incarnation only after acquire: a stopped child may
+      // have been replaced while this request was waiting for readiness.
+      const caller = await callerHeaders(auth, split.id, b.generation)
+      const req = c.req.raw
+      const signal = caller.signal ? AbortSignal.any([req.signal, caller.signal]) : req.signal
       const res = await new Promise<IncomingMessage>((resolve, reject) => {
-        // `signal`: the client went away (before or after the response
-        // head) → the upstream request is destroyed → error / close → release.
-        const up = http.request({ socketPath: b.socket, path: split.target, method: req.method, headers: forwardHeaders(reqHeaders, split.id), signal: req.signal }, resolve)
+        const pairs: Array<[string, string]> = []
+        req.headers.forEach((value, key) => pairs.push([key, value]))
+        const headers = { ...forwardHeaders(pairs, split.id), ...caller.headers }
+        const up = http.request({ socketPath: b.socket, path: split.target, method: req.method, headers, signal }, resolve)
         up.on('error', reject)
         if (req.body) Readable.fromWeb(req.body as import('node:stream/web').ReadableStream).on('error', (e) => up.destroy(e)).pipe(up)
         else up.end()
@@ -99,75 +131,74 @@ export function createExtBackendRoutes(backends: ExtensionBackends = extensionBa
       const headers = new Headers()
       for (const [k, v] of headerPairs(res.headers)) if (!DROP_RESPONSE.has(k)) headers.append(k, v)
       const status = res.statusCode ?? 502
-      if (NULL_BODY_STATUS.has(status)) {
-        res.resume()
-        return new Response(null, { status, headers })
-      }
+      if (NULL_BODY_STATUS.has(status)) { res.resume(); return new Response(null, { status, headers }) }
       return new Response(Readable.toWeb(res) as ReadableStream, { status, headers })
     } catch (err) {
       release()
+      if (err instanceof ExtensionAccessError) return c.json({ error: err.message }, err.status)
       return c.json({ error: `extension backend request failed: ${errMsg(err)}` }, 502)
     }
   }
-
   app.all('/ext/:id', handle)
   app.all('/ext/:id/*', handle)
   return app
 }
 
-/** Upgrade handler for the `EXT_BACKEND_PREFIX` subtree. */
 export function createExtBackendUpgrade(backends: ExtensionBackends = extensionBackends) {
   const reject = (socket: Duplex, status: string): void => { socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`) }
-
   return (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     socket.on('error', () => socket.destroy())
-    if (!isAuthenticated(getTokenFromCookieHeader(req.headers.cookie))) return reject(socket, '401 Unauthorized')
     const split = splitTarget(req.url ?? '')
-    const ext = split ? backendExtension(split.id) : undefined
-    if (!split || !ext) return reject(socket, '404 Not Found')
-
-    void backends.acquire(ext).then((b) => {
+    if (!split) return reject(socket, '404 Not Found')
+    let auth: Auth
+    try {
+      const scheme = 'encrypted' in req.socket && req.socket.encrypted ? 'https' : 'http'
+      auth = authenticate(split.id, new Headers(headerPairs(req.headers)), new URL(req.url!, `${scheme}://${req.headers.host}`), 'GET', true)
+    } catch (err) {
+      return reject(socket, err instanceof ExtensionAccessError && err.status === 403 ? '403 Forbidden' : '401 Unauthorized')
+    }
+    const ext = backendExtension(split.id)
+    if (!ext) return reject(socket, '404 Not Found')
+    void (async () => {
+      const b = await backends.acquire(ext)
       let released = false
-      const release = () => { if (!released) { released = true; backends.release(b) } }
-      if (socket.destroyed) { release(); return }
-      // Upgrade headers are hop-by-hop but are the point here: put them back.
-      const headers = forwardHeaders(headerPairs(req.headers), split.id)
-      headers.connection = 'Upgrade'
-      headers.upgrade = req.headers.upgrade ?? 'websocket'
-      const up = http.request({ socketPath: b.socket, path: split.target, method: 'GET', headers })
-      // The client leaving before the backend answered cancels the handshake.
-      socket.once('close', () => { release(); up.destroy() })
-      up.on('upgrade', (res, upSocket, upHead) => {
-        if (socket.destroyed) { upSocket.destroy(); return }
-        // Same filter as HTTP responses (no Set-Cookie on the admin origin);
-        // the two upgrade headers it drops as hop-by-hop are set here.
-        const lines = [`HTTP/1.1 101 ${res.statusMessage ?? 'Switching Protocols'}`, `Upgrade: ${res.headers.upgrade ?? 'websocket'}`, 'Connection: Upgrade']
-        for (let i = 0; i < res.rawHeaders.length; i += 2) {
-          if (!DROP_RESPONSE.has(res.rawHeaders[i].toLowerCase())) lines.push(`${res.rawHeaders[i]}: ${res.rawHeaders[i + 1]}`)
-        }
-        socket.write(`${lines.join('\r\n')}\r\n\r\n`)
-        if (upHead.length) socket.write(upHead)
-        if (head.length) upSocket.write(head)
-        upSocket.on('error', () => socket.destroy())
-        upSocket.on('close', () => socket.destroy())
-        socket.on('close', () => upSocket.destroy())
-        upSocket.pipe(socket)
-        socket.pipe(upSocket)
-      })
-      // The backend answered without upgrading (400 / 404 …): relay its status.
-      up.on('response', (res) => {
-        res.resume()
-        reject(socket, `${res.statusCode ?? 502} ${res.statusMessage ?? ''}`.trim())
-      })
-      up.on('error', (err) => {
-        if (socket.destroyed) return // our own destroy() after the client left
-        console.warn(`[ExtBackend] ${split.id}: WS forward failed: ${errMsg(err)}`)
-        reject(socket, '502 Bad Gateway')
-      })
-      up.end()
-    }, (err) => {
+      let abort: (() => void) | undefined
+      let signal: AbortSignal | undefined
+      const release = () => {
+        if (!released) { released = true; backends.release(b) }
+        if (abort) signal?.removeEventListener('abort', abort)
+      }
+      try {
+        const caller = await callerHeaders(auth, split.id, b.generation)
+        signal = caller.signal
+        if (socket.destroyed || signal?.aborted) { release(); socket.destroy(); return }
+        const headers = { ...forwardHeaders(headerPairs(req.headers), split.id), ...caller.headers, connection: 'Upgrade', upgrade: req.headers.upgrade ?? 'websocket' }
+        const up = http.request({ socketPath: b.socket, path: split.target, method: 'GET', headers })
+        abort = () => { up.destroy(); socket.destroy() }
+        signal?.addEventListener('abort', abort, { once: true })
+        socket.once('close', () => { release(); up.destroy() })
+        up.on('upgrade', (res, upSocket, upHead) => {
+          if (socket.destroyed || signal?.aborted) { upSocket.destroy(); return }
+          const lines = [`HTTP/1.1 101 ${res.statusMessage ?? 'Switching Protocols'}`, `Upgrade: ${res.headers.upgrade ?? 'websocket'}`, 'Connection: Upgrade']
+          for (let i = 0; i < res.rawHeaders.length; i += 2) {
+            if (!DROP_RESPONSE.has(res.rawHeaders[i].toLowerCase())) lines.push(`${res.rawHeaders[i]}: ${res.rawHeaders[i + 1]}`)
+          }
+          socket.write(`${lines.join('\r\n')}\r\n\r\n`)
+          if (upHead.length) socket.write(upHead)
+          if (head.length) upSocket.write(head)
+          upSocket.on('error', () => socket.destroy())
+          upSocket.on('close', () => socket.destroy())
+          socket.on('close', () => upSocket.destroy())
+          upSocket.pipe(socket)
+          socket.pipe(upSocket)
+        })
+        up.on('response', (res) => { res.resume(); reject(socket, `${res.statusCode ?? 502} ${res.statusMessage ?? ''}`.trim()) })
+        up.on('error', () => { if (!socket.destroyed) reject(socket, '502 Bad Gateway') })
+        up.end()
+      } catch (err) { release(); throw err }
+    })().catch((err: unknown) => {
+      if (err instanceof ExtensionAccessError) return reject(socket, err.status === 401 ? '401 Unauthorized' : '403 Forbidden')
       if (err instanceof BackendUnconfirmedError) return reject(socket, '403 Forbidden')
-      console.warn(`[ExtBackend] ${split.id}: ${errMsg(err)}`)
       reject(socket, '502 Bad Gateway')
     })
   }

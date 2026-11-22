@@ -336,6 +336,8 @@ export interface WorkspaceToolsOptions {
    * up yet (e.g. the agent-form preview).
    */
   supportsVision?: boolean
+  /** Resolved only for an actual full-access shell invocation, never schemas. */
+  shellContext?: () => Promise<{ env: Record<string, string>; secrets: string[] }>
 }
 
 export function createWorkspaceTools(
@@ -707,11 +709,15 @@ export function createWorkspaceTools(
     // it out of the stored tool result when a command echoes it (env, curl -v).
     // One snapshot for both, so a save mid-command can't split them.
     const proxy = outboundProxy()
-    const mask = (s: string) => maskSecrets(maskProxyCredential(s, proxy), paramSecrets)
+    const secrets = [...paramSecrets]
+    const mask = (s: string) => maskSecrets(maskProxyCredential(s, proxy), secrets)
 
     try {
+      const context = accessLevel === 'full' ? await opts.shellContext?.() : undefined
+      secrets.push(...(context?.secrets ?? []))
       const { stdout, stderr } = await sandboxExec(cmd, {
         ...sbOpts,
+        ...context,
         timeout: config.timeout.shellExec,
         maxBuffer: config.limits.shellOutputBuffer,
         signal,
