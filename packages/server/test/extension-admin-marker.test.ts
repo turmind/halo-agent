@@ -8,7 +8,8 @@ import type { ExtensionBackendHostMessage, ExtensionNotice, ExtensionNoticeRecor
 import { setupWebSocketHandler } from '../src/ws/handler.js'
 import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
 import { agentSessions } from '../src/db/schema.js'
-import { createExtensionNotices, type ExtensionNotices, type NoticeSessionAccess } from '../src/extensions/notices.js'
+import { createExtensionNotices, type ExtensionNotices } from '../src/extensions/notices.js'
+import { ExtensionSessionAccess } from '../src/extensions/session-access.js'
 import { broadcastToWorkspace, setBroadcastWss } from '../src/ws/broadcast.js'
 import { dispatchCommand, type CommandContext } from '../src/channels/shared/commands.js'
 
@@ -19,6 +20,9 @@ let server: Server
 let wss: WebSocketServer
 let registry: SessionManagerRegistry
 let notices: ExtensionNotices
+let access: ExtensionSessionAccess
+let bindingId: string
+let unsubscribe: () => void
 let port: number
 let sockets: WebSocket[]
 let accepted: ReturnType<typeof vi.fn<(projectId: string, sessionId: string) => string>>
@@ -40,7 +44,7 @@ async function barrier(client: Awaited<ReturnType<typeof connect>>, projectId = 
   client.send({ type: 'subscribe', projectId })
   await vi.waitFor(() => expect(client.frames.filter((f) => f.type === 'extension:notice:snapshot')).toHaveLength(count + 1))
 }
-const post = () => notices.handleMessage('ext', 'generation', { type: 'halo:notice', requestId: 'req', bindingId: 'binding', notice })
+const post = () => notices.handleMessage('ext', 'generation', { type: 'halo:notice', requestId: 'req', bindingId, notice })
 const respond = { type: 'extension:notice:respond', extensionId: 'ext', generation: 'generation', id: 'copy', decision: 'confirm' }
 
 beforeEach(async () => {
@@ -58,26 +62,32 @@ beforeEach(async () => {
     vi.spyOn(sm, 'sendUserMessage').mockImplementation(async () => { order.push('send'); return 'running' })
     vi.spyOn(sm, 'enqueueUserMessage').mockImplementation(async () => { order.push('enqueue') })
   }
-  accepted = vi.fn(() => { order.push('human'); return 'new-marker' })
-  // Only A's routing port is stubbed. Real handler + notice broker + WS broadcast.
-  const access: NoticeSessionAccess = {
-    getBinding: (id, generation, bindingId) => id === 'ext' && generation === 'generation' && bindingId === 'binding'
-      ? { kind: 'session', bindingId, projectId: workspace, sessionId: sid, rootSessionId: 'root', agentId: 'fixture', userTurnId: null } : null,
-    retainBinding: () => true,
-  }
+  // Real A broker + B notices + Admin ingress; only model execution/IPC is stubbed.
+  access = new ExtensionSessionAccess(async (projectId, sessionId) => ({ projectId, sessionId, rootSessionId: 'root', agentId: 'fixture', extensionIds: ['ext'] }))
+  accepted = vi.fn((projectId, sessionId) => { order.push('human'); return access.acceptAdminInput(projectId, sessionId) })
   sendToGeneration = vi.fn(() => true)
   notices = createExtensionNotices({ access, backends: { sendToGeneration }, broadcast: broadcastToWorkspace, lookup: () => ({
     id: 'ext', name: 'Extension', version: '1.0.0', entry: 'index.html', extensions: [], canvas: {}, priority: 'default', capabilities: [], bundle: false, installedAt: 1, backend: { entry: 'b.cjs', confirmed: true },
   }) })
+  unsubscribe = access.subscribe(({ extensionId, generation, message }) => {
+    sendToGeneration(extensionId, generation, message)
+    if (message.type === 'halo:caller:revoked') notices.revokeBinding(extensionId, generation, message.bindingId)
+  })
   server = createServer()
   wss = new WebSocketServer({ server, path: '/ws' })
   setupWebSocketHandler({ wss, registry, extensionNotices: notices, acceptAdminInput: accepted })
   setBroadcastWss(wss)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   port = (server.address() as { port: number }).port
+  access.start({ baseUrl: `http://127.0.0.1:${port}` })
+  const shell = await access.shellContext(workspace, sid)
+  const key = (JSON.parse(shell.env.HALO_EXT_BACKENDS) as Record<string, { accessKey: string }>).ext.accessKey
+  bindingId = access.bindSession('ext', 'generation', `Bearer ${key}`).caller.bindingId
 })
 afterEach(async () => {
+  access.close()
   notices.close()
+  unsubscribe()
   for (const ws of sockets) ws.terminate()
   wss.close()
   await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -166,6 +176,19 @@ describe('authenticated Admin ingress integration', () => {
     expect(sendToGeneration.mock.calls.filter(([, , m]) => m.type === 'halo:notice:result')).toHaveLength(1)
     expect(accepted).not.toHaveBeenCalled()
     expect(order).toEqual([])
+  })
+
+  it.each(['session-stopped', 'shutdown'] as const)('withdraws through the real A broker on %s before accepting a queued answer', async (reason) => {
+    const a = await connect()
+    await barrier(a)
+    post()
+    if (reason === 'shutdown') access.close()
+    else access.revokeSession(workspace, sid, reason)
+    a.send(respond)
+    await barrier(a)
+    expect(a.frames).toContainEqual({ type: 'extension:notice:resolved', extensionId: 'ext', generation: 'generation', id: 'copy', decision: 'withdrawn' })
+    expect(a.frames).not.toContainEqual({ type: 'extension:notice:response', extensionId: 'ext', generation: 'generation', id: 'copy', status: 'accepted' })
+    expect(sendToGeneration).toHaveBeenCalledWith('ext', 'generation', expect.objectContaining({ type: 'halo:caller:revoked', bindingId }))
   })
 
   it('rechecks a queued answer after backend generation invalidation', async () => {

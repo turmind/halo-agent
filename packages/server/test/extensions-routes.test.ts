@@ -385,11 +385,12 @@ describe('POST /api/extensions/:id/confirm-backend', () => {
 // the URL was built (the admin doesn't load it; this is the server's half).
 describe('static assets of an unconfirmed backend extension', () => {
   const files = {
-    'halo-extension.json': JSON.stringify({ ...manifest, extensions: [], backend: { entry: 'backend/main.cjs' }, activity: { icon: 'icons/a.svg' }, chatbar: { icon: 'c.png' } }),
+    'halo-extension.json': JSON.stringify({ ...manifest, extensions: [], backend: { entry: 'backend/main.cjs' }, activity: { icon: 'icons/a.svg' }, chatbar: { icon: 'c.png' }, canvas: { icon: 'icons/canvas.svg' } }),
     'index.html': '<html>glb</html>',
     'app.js': 'console.log(1)',
     'icons/a.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>',
     'c.png': Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    'icons/canvas.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>',
     'backend/main.cjs': '',
   }
   beforeEach(async () => { expect((await upload(app, await zipOf(files), cookie)).status).toBe(200) })
@@ -402,7 +403,7 @@ describe('static assets of an unconfirmed backend extension', () => {
     }
     // Review-3: an icon (an SVG may carry <script>) opened directly is a
     // sandboxed, script-less document.
-    for (const rest of ['icons/a.svg', 'c.png']) {
+    for (const rest of ['icons/a.svg', 'c.png', 'icons/canvas.svg']) {
       const res = await asset('glb', '1.0.0', rest)
       expect(res.status, rest).toBe(200)
       expect(res.headers.get('content-security-policy'), rest).toBe("default-src 'none'; style-src 'unsafe-inline'; sandbox")

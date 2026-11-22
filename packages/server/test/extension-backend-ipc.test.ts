@@ -4,7 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ExtensionInfo } from '@turmind/halo-core/protocol'
 import { createExtensionBackends } from '../src/extensions/backend.js'
-import { createExtensionNotices, type NoticeSessionAccess } from '../src/extensions/notices.js'
+import { createExtensionNotices } from '../src/extensions/notices.js'
+import { ExtensionSessionAccess } from '../src/extensions/session-access.js'
 import { confirmExtensionBackend, forgetExtension } from '../src/extensions/state.js'
 
 const ext: ExtensionInfo = { id: 'ipc-test', name: 'IPC test', version: '1.0.0', entry: 'index.html', extensions: [], canvas: {}, capabilities: [], priority: 'default', bundle: false, installedAt: 1, backend: { entry: 'backend.cjs', confirmed: true } }
@@ -42,27 +43,38 @@ describe('backend generation and private IPC port', () => {
       process.send({ type: 'ready' })
     `)
     let liveGeneration = ''
-    const access: NoticeSessionAccess = {
-      getBinding: (id, generation, bindingId) => id === ext.id && generation === liveGeneration && bindingId === 'binding'
-        ? { kind: 'admin', bindingId, projectId: root, userTurnId: null } : null,
-      retainBinding: () => true,
-    }
+    const access = new ExtensionSessionAccess(async (projectId, sessionId) => ({ projectId, sessionId, rootSessionId: sessionId, agentId: 'test', extensionIds: [ext.id] }))
+    access.start({ baseUrl: 'http://127.0.0.1:19273' })
     const broadcast = vi.fn()
     const notices = createExtensionNotices({ access, backends, lookup: () => ext, broadcast })
     const received = vi.fn()
-    const unbind = [backends.onMessage(notices.handleMessage), backends.onMessage(received), backends.onExit(notices.dropBackendGeneration)]
+    const unbind = [
+      backends.onMessage(notices.handleMessage), backends.onMessage(received),
+      access.subscribe(({ extensionId, generation, message }) => {
+        backends.sendToGeneration(extensionId, generation, message)
+        if (message.type === 'halo:caller:revoked') notices.revokeBinding(extensionId, generation, message.bindingId)
+      }),
+      backends.onExit((id, generation) => { access.dropBackendGeneration(id, generation); notices.dropBackendGeneration(id, generation) }),
+    ]
     try {
       const backend = await backends.acquire(ext)
       liveGeneration = backend.generation
-      backends.sendToGeneration(ext.id, liveGeneration, reply)
+      const shell = await access.shellContext(root, 'session')
+      const key = (JSON.parse(shell.env.HALO_EXT_BACKENDS) as Record<string, { accessKey: string }>)[ext.id].accessKey
+      const { caller } = access.bindSession(ext.id, liveGeneration, `Bearer ${key}`)
+      access.acceptAdminInput(root, 'session')
       await vi.waitFor(() => expect(broadcast).toHaveBeenCalledWith(root, expect.objectContaining({ type: 'extension:notice' })))
       expect(notices.respond(root, { type: 'extension:notice:respond', extensionId: ext.id, generation: liveGeneration, id: 'copy', decision: 'confirm' })).toMatchObject({ status: 'accepted' })
       await vi.waitFor(() => expect(received).toHaveBeenCalledWith(ext.id, liveGeneration, {
         type: 'received-result', message: { type: 'halo:notice:result', id: 'copy', generation: liveGeneration, decision: 'confirm' },
       }))
+      expect(() => access.validate(ext.id, `Bearer ${key}`)).toThrow()
+      expect(access.getBinding(ext.id, liveGeneration, caller.bindingId)).not.toBeNull()
       await backends.close()
+      expect(access.getBinding(ext.id, liveGeneration, caller.bindingId)).toBeNull()
       expect(notices.respond(root, { type: 'extension:notice:respond', extensionId: ext.id, generation: liveGeneration, id: 'copy', decision: 'confirm' })).toMatchObject({ status: 'denied' })
     } finally {
+      access.close()
       notices.close()
       for (const off of unbind) off()
     }

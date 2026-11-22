@@ -27,13 +27,16 @@ import { createCommandRoutes } from './routes/commands.js'
 import { createTranscribeProxy, TRANSCRIBE_PATH } from './routes/transcribe-ws.js'
 import { createExtBackendRoutes, createExtBackendUpgrade, EXT_BACKEND_PREFIX } from './routes/ext-backend.js'
 import { extensionBackends } from './extensions/backend.js'
+import { createExtensionNotices } from './extensions/notices.js'
+import { getExtension } from './extensions/registry.js'
+import { extensionSessionAccess } from './extensions/session-access.js'
 import { createJupyterChannels, createJupyterRoutes, JUPYTER_CHANNELS_PATH } from './routes/jupyter.js'
 import { createJupyterManager } from './jupyter/manager.js'
 import { createUpgradeRouter, type UpgradeHandler } from './ws/upgrade-router.js'
 import { commandRegistry } from './commands/index.js'
 import { DISPATCH_COMMANDS } from './channels/shared/commands.js'
 import { setupWebSocketHandler } from './ws/handler.js'
-import { setBroadcastWss } from './ws/broadcast.js'
+import { broadcastToWorkspace, setBroadcastWss } from './ws/broadcast.js'
 import { SessionManagerRegistry } from './agents/session-manager-registry.js'
 import { claimWorkspaceRuntime, releaseWorkspaceRuntime } from './agents/workspace-runtime-lock.js'
 import { setRelayRegistry } from './agents/relay.js'
@@ -626,6 +629,27 @@ app.onError((err, c) => {
 // Start server with WebSocket support
 // ------------------------------------------------------------------
 
+const extensionNotices = AGENTCORE ? null : createExtensionNotices({
+  access: extensionSessionAccess,
+  backends: extensionBackends,
+  lookup: getExtension,
+  broadcast: broadcastToWorkspace,
+})
+const extensionSubscriptions: Array<() => void> = []
+if (extensionNotices) {
+  extensionSubscriptions.push(
+    extensionBackends.onMessage(extensionNotices.handleMessage),
+    extensionSessionAccess.subscribe(({ extensionId, generation, message }) => {
+      extensionBackends.sendToGeneration(extensionId, generation, message)
+      if (message.type === 'halo:caller:revoked') extensionNotices.revokeBinding(extensionId, generation, message.bindingId)
+    }),
+    extensionBackends.onExit((id, generation) => {
+      extensionSessionAccess.dropBackendGeneration(id, generation)
+      extensionNotices.dropBackendGeneration(id, generation)
+    }),
+  )
+}
+
 // Session-dirs worker (a2a/agentcore-front.ts): reachable only through the
 // front's proxy, so loopback only; it tells the front it is up (push, no probe).
 const AGENTCORE_WORKER = AGENTCORE && !!process.env[FRONT_URL_ENV]
@@ -634,6 +658,12 @@ const server = serve({
   port: PORT,
   ...(AGENTCORE_WORKER ? { hostname: '127.0.0.1' } : {}),
 }, (info) => {
+  if (!AGENTCORE) {
+    // serve() creates an HTTP listener; choose its loopback family, never the
+    // public/reverse-proxy URL or configured port (which may have been zero).
+    const host = info.family === 'IPv6' ? '[::1]' : '127.0.0.1'
+    extensionSessionAccess.start({ baseUrl: `http://${host}:${info.port}` })
+  }
   if (AGENTCORE_WORKER) void postToFront('/ready', {})
   // Always shown (stderr, whatever the log level): without it a foreground
   // `halo server start` prints nothing at the default `warn` and the user
@@ -667,8 +697,11 @@ const wss = new WebSocketServer({
 })
 
 // AgentCore mode has no admin WS (broadcast() no-ops while unset).
-if (!AGENTCORE) {
-  setupWebSocketHandler({ wss, registry })
+if (extensionNotices) {
+  setupWebSocketHandler({
+    wss, registry, extensionNotices,
+    acceptAdminInput: (projectId, sessionId) => extensionSessionAccess.acceptAdminInput(projectId, sessionId),
+  })
   // Make `wss` reachable from non-handler code (evo wrapper, cron runner,
   // admin route mutations) so they can `broadcast({ type, ... })` without
   // having to thread the handle through every call site.
@@ -702,6 +735,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
   stopEvoTicker()
   stopArchiveDaemon()
   stopExtensionsWatcher()
+  // Revoke while IPC and Admin sockets still exist, then detach all hooks.
+  extensionSessionAccess.close()
+  extensionNotices?.close()
+  for (const unsubscribe of extensionSubscriptions.splice(0)) unsubscribe()
   stopModelsWatcher()
   // Before channels drain: the 10s reconcile poll would otherwise rebuild
   // schedules (and fire new runs) while we're mid-shutdown.

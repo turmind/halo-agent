@@ -33,7 +33,7 @@
  * very next GET already reflect the change without waiting for the debounce.
  *
  * An extension whose manifest `backend` is not confirmed serves only its
- * declared icons (`activity.icon`, `chatbar.icon` — CSS masks in the bars,
+ * declared icons (`activity.icon`, `chatbar.icon`, `canvas.icon` — CSS masks,
  * no script); everything else is 403 `backend-unconfirmed`. The admin
  * doesn't load its pages until then either (extension-backend-gate.tsx), but
  * this is the boundary: with a token any URL here could be opened by hand,
@@ -119,7 +119,7 @@ export function resolveAsset(id: string, version: string, rest: string): { file:
   const info = getInstalledExtension(id)
   if (!info || info.version !== version) return null
   const unconfirmed = !!info.backend && !info.backend.confirmed
-  if (unconfirmed && rest !== info.activity?.icon && rest !== info.chatbar?.icon) return 'unconfirmed'
+  if (unconfirmed && rest !== info.activity?.icon && rest !== info.chatbar?.icon && rest !== info.canvas?.icon) return 'unconfirmed'
   const segments = rest.split('/')
   if (segments.some((s) => s === '' || s === '.' || s === '..' || s.startsWith('.') || s.includes('\\'))) return null
   let dir: string
