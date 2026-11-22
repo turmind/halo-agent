@@ -401,6 +401,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       if (chat) {
         if (view.sessionId) backToChat(view.sessionId)
       } else {
+        useEditorStore.getState().setBottomMaximized(false)
         window.dispatchEvent(new CustomEvent('halo:canvas-ready-open', { detail: view }))
         window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer', force: true, sidebar: false } }))
       }

@@ -28,8 +28,8 @@ export function ExtensionNoticeQueue() {
   const notices = state.notices.filter((n) => !state.dismissed.includes(noticeKey(n)))
   // A new request or reconnect snapshot deserves attention even after Open
   // collapsed an earlier notice to uncover the live Canvas.
-  const [lastNotices, setLastNotices] = useState(state.notices)
-  if (lastNotices !== state.notices) { setLastNotices(state.notices); setCollapsed(false) }
+  const [lastAttention, setLastAttention] = useState(state.attentionVersion)
+  if (lastAttention !== state.attentionVersion) { setLastAttention(state.attentionVersion); setCollapsed(false) }
   if (!notices.length) return null
   function answer(n: ExtensionNoticeRecord, decision: ExtensionNoticeAnswer) {
     const frame = noticeAnswer(useExtensionNotices.getState(), n, projectId, decision)

@@ -16,8 +16,9 @@ export interface NoticeState {
   errors: Record<string, string>
   connected: boolean
   syncedProject: string | null
+  attentionVersion: number
 }
-export const initialNoticeState = (): NoticeState => ({ notices: [], pending: [], dismissed: [], errors: {}, connected: false, syncedProject: null })
+export const initialNoticeState = (): NoticeState => ({ notices: [], pending: [], dismissed: [], errors: {}, connected: false, syncedProject: null, attentionVersion: 0 })
 export const useExtensionNotices = create<NoticeState>(() => initialNoticeState())
 
 /** Snapshot is authoritative for its workspace, including empty and new generations. */
@@ -25,12 +26,23 @@ export function reduceNotice(state: NoticeState, frame: ExtensionNoticeServerFra
   switch (frame.type) {
     case 'extension:notice:snapshot': {
       const notices = frame.notices.filter((n) => n.projectId === frame.projectId && Date.parse(n.expiresAt) > now)
-      return { ...state, notices, pending: [], dismissed: [], errors: {}, syncedProject: frame.projectId }
+      // Every subscribe sends a snapshot, including opening another chat on the
+      // same socket. Only disconnect (which clears syncedProject) resets local UI.
+      const fresh = state.syncedProject !== frame.projectId
+      const previous = new Set(state.notices.map(noticeKey))
+      const keys = new Set(notices.map(noticeKey))
+      return {
+        ...state, notices, syncedProject: frame.projectId,
+        pending: fresh ? [] : state.pending.filter((key) => keys.has(key)),
+        dismissed: fresh ? [] : state.dismissed.filter((key) => keys.has(key)),
+        errors: fresh ? {} : Object.fromEntries(Object.entries(state.errors).filter(([key]) => keys.has(key))),
+        attentionVersion: state.attentionVersion + (fresh || notices.some((n) => !previous.has(noticeKey(n))) ? 1 : 0),
+      }
     }
     case 'extension:notice': {
       const key = noticeKey(frame)
       if (Date.parse(frame.expiresAt) <= now || state.notices.some((n) => noticeKey(n) === key)) return state
-      return { ...state, notices: [...state.notices, frame] }
+      return { ...state, notices: [...state.notices, frame], attentionVersion: state.attentionVersion + 1 }
     }
     case 'extension:notice:resolved':
     case 'extension:notice:response': {

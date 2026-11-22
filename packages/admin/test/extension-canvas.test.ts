@@ -12,8 +12,26 @@ import { resetExtensionTokenCache } from '../src/features/editor/previews/extens
 import { EditorPanel } from '../src/features/editor/editor-panel'
 import { useProjectStore } from '../src/shared/stores/project-store'
 import { ImmersivePane, ImmersiveScope, isImmersive } from '../src/features/editor/immersive'
+import { WorkspaceLayout } from '../src/features/workspace/workspace-layout'
 
+// jsdom has no panel geometry; keep lifecycle/content real, stub layout handles.
+vi.mock('react-resizable-panels', async () => {
+  const { createElement, forwardRef, useImperativeHandle } = await import('react')
+  const panel = ({ children }: { children?: import('react').ReactNode }) => createElement('div', null, children)
+  return {
+    Panel: panel, PanelResizeHandle: () => null,
+    PanelGroup: forwardRef((props: { children?: import('react').ReactNode }, ref) => {
+      useImperativeHandle(ref, () => ({ getLayout: () => [65, 35], setLayout: () => {} }))
+      return panel(props)
+    }),
+  }
+})
 vi.mock('../src/features/editor/code-editor', () => ({ CodeEditor: () => null }))
+vi.mock('../src/features/workspace/bottom-panel', () => ({ BottomPanel: () => null }))
+vi.mock('../src/features/explorer/explorer-sidebar', () => ({ ExplorerSidebar: () => null }))
+vi.mock('../src/features/explorer/git-decorations', () => ({ useGitDecorationsSync: () => {}, useIsRepo: () => false }))
+vi.mock('../src/features/workspace/quick-toggles', () => ({ QuickToggles: () => null, useQuickToggleItems: () => ({ items: [], notifyOnFinish: false }) }))
+vi.mock('../src/features/chat/chat-tabs', () => ({ openTab: vi.fn(), restoreTabs: vi.fn() }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} }
 const view: CanvasView = { kind: 'extension', extensionId: 'sample', viewId: 'live', projectId: '/workspace', sessionId: 'child' }
@@ -72,6 +90,17 @@ describe('typed file-less tabs', () => {
 })
 
 describe('Canvas host and editor', () => {
+  it.each(['chat', 'terminal'] as const)('Open Canvas uncovers a maximized %s bottom panel', async (bottomTab) => {
+    vi.spyOn(api.fs, 'home').mockResolvedValue({ home: view.projectId })
+    vi.spyOn(api.fs, 'resolveWorkspace').mockResolvedValue({ path: view.projectId, id: 'workspace' })
+    vi.spyOn(api.files, 'tree').mockResolvedValue({ projectId: view.projectId, root: 'workspace', path: '', tree: [] })
+    useEditorStore.setState({ bottomTab, bottomMaximized: true })
+    await act(async () => root.render(createElement(WorkspaceLayout, { linkState: 'fresh' })))
+    expect(useEditorStore.getState().bottomMaximized).toBe(true)
+    await act(async () => window.dispatchEvent(new CustomEvent('halo:extension-canvas', { detail: view })))
+    expect(useEditorStore.getState().bottomMaximized).toBe(false)
+    expect(host.querySelector('[data-extension-canvas] iframe')).not.toBeNull()
+  })
   it('restores alongside files and split panes without calling file endpoints for Canvas metadata', async () => {
     const key = canvasKey(view)
     localStorage.setItem(`halo_tabs:${view.projectId}`, JSON.stringify({ groups: [{ tabs: [{ path: 'a.ts' }], activeTab: 'a.ts' }, { tabs: [{ path: key, kind: 'extension', extensionView: view }], activeTab: key }], activeGroupIdx: 1 }))
@@ -101,6 +130,39 @@ describe('Canvas host and editor', () => {
     expect(useEditorStore.getState().buffers['draft.ts'].modified).toBe(true)
     expect(host.querySelector('iframe')).not.toBeNull()
     expect(read).not.toHaveBeenCalled()
+  })
+  it('immersive unmounts the hidden Canvas pane and remounts it on exit', async () => {
+    await act(async () => root.render(createElement(EditorPanel, { projectId: view.projectId, mode: 'editor-only' })))
+    await act(async () => {
+      const s = useEditorStore.getState()
+      s.openExtension(view); s.splitToRight(canvasKey(view)); s.openExtension({ ...view, viewId: 'second' })
+    })
+    const [hiddenFrame, activeFrame] = [...host.querySelectorAll('iframe')]
+    expect(host.querySelectorAll('iframe')).toHaveLength(2)
+    await act(async () => useEditorStore.getState().setMaximized(true))
+    expect(isImmersive()).toBe(true)
+    expect(host.querySelectorAll('iframe')).toHaveLength(1)
+    expect(activeFrame.isConnected).toBe(true); expect(hiddenFrame.isConnected).toBe(false)
+    await act(async () => useEditorStore.getState().setMaximized(false))
+    expect(host.querySelectorAll('iframe')).toHaveLength(2)
+    expect(host.querySelectorAll('iframe')[0]).not.toBe(hiddenFrame)
+    expect(activeFrame.isConnected).toBe(true)
+  })
+  it('immersive keeps the hidden file viewer mounted with its unsaved buffer', async () => {
+    await act(async () => root.render(createElement(EditorPanel, { projectId: view.projectId, mode: 'editor-only' })))
+    await act(async () => {
+      const s = useEditorStore.getState()
+      s.openFile('draft.html', '<p>saved</p>', 'html'); s.updateContent('draft.html', '<p>unsaved</p>')
+      s.splitToRight('draft.html'); s.openExtension(view)
+    })
+    const fileFrame = host.querySelector('iframe[title="draft.html"]')!
+    expect(fileFrame).not.toBeNull()
+    await act(async () => useEditorStore.getState().setMaximized(true))
+    expect(isImmersive()).toBe(true)
+    expect(fileFrame.isConnected).toBe(true)
+    expect(useEditorStore.getState().buffers['draft.html'].modified).toBe(true)
+    await act(async () => useEditorStore.getState().setMaximized(false))
+    expect(host.querySelector('iframe[title="draft.html"]')).toBe(fileFrame)
   })
   it('malformed / foreign Canvas restores are dropped, never read as paths', async () => {
     const key = canvasKey(view)

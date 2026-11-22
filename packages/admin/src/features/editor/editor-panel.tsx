@@ -1409,7 +1409,8 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                       {(() => {
                         const paneDiff = diffByGroup[group.id]
                         const paneRender = getRenderMode(group.id)
-                        if (paneFile?.kind === 'extension') return <ExtensionCanvasPanel key={paneFile.path} view={paneFile.extensionView} />
+                        // Immersive CSS hides the other pane; only live Canvas apps unmount.
+                        if (paneFile?.kind === 'extension') return immersive && !isFocused ? null : <ExtensionCanvasPanel key={paneFile.path} view={paneFile.extensionView} />
                         if (paneFile?.preview) return null
                         if (paneDiff) return (
                           <div className="h-full flex flex-col">

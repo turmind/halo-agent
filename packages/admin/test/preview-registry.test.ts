@@ -390,7 +390,7 @@ describe('EditorPanel routing while the extension list is in flight', () => {
       groups: [{ tabs: [{ path: 'a.png', isPreview: true }, { path: 'b.glb', isPreview: true }], activeTab: 'b.glb' }],
       activeGroupIdx: 0,
     }))
-    const { respond, stat, read, buffers } = await mountPanel()
+    const { respond, stat, read, buffers } = await mountPanel('editor-only')
 
     await act(async () => {
       await vi.waitFor(() => expect(stat).toHaveBeenCalledWith('a.png', PROJECT))
