@@ -206,7 +206,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     const resolveAndOpen = async (target: string, writeUrl: boolean) => {
       try {
         const ws = await api.fs.resolveWorkspace(target)
-        migrateWorkspaceUiState(target, ws.path)
+        migrateWorkspaceUiState(ws.requestedPath ?? target, ws.path)
         openFolder(ws.path, ws.id)
         setPathInput(ws.path)
         loadFileTree(ws.path)

@@ -114,7 +114,7 @@ export const api = {
       return res.text()
     },
     resolveWorkspace(path: string) {
-      return request<{ id: string; path: string }>('/fs/workspace/resolve', {
+      return request<{ id: string; path: string; requestedPath?: string }>('/fs/workspace/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),

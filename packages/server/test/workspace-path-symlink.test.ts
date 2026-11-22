@@ -154,8 +154,19 @@ describe('POST /fs/workspace/resolve guards (B-M2)', () => {
     fs.symlinkSync(path.parse(ws).root, rootLink, 'dir')
     const res = await resolve(link)
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ id: fs.realpathSync(ws), path: fs.realpathSync(ws) })
+    expect(await res.json()).toEqual({ id: fs.realpathSync(ws), path: fs.realpathSync(ws), requestedPath: link })
     expect((await resolve(rootLink)).status).toBe(400)
+  })
+  it.each(['/', '/.', '/child/..'])('returns the lexical requestedPath for a symlink ending in %s', async (suffix) => {
+    const link = path.join(ws, 'requested-workspace-link')
+    fs.symlinkSync(ws, link, 'dir')
+    try {
+      const res = await resolve(link + suffix)
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ id: fs.realpathSync(ws), path: fs.realpathSync(ws), requestedPath: path.resolve(link) })
+    } finally {
+      fs.unlinkSync(link)
+    }
   })
   it('accepts a real directory and scaffolds .halo/', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-resolve-ok-'))

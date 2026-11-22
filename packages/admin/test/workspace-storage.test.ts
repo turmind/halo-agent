@@ -31,16 +31,57 @@ describe('canonical workspace UI storage migration', () => {
     migrateWorkspaceUiState(source, canonical)
     expect(set).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled()
   })
-  it('keeps existing canonical values, including an empty string, and removes old keys', () => {
+  it('keeps existing canonical values, including an empty string, and retains old keys', () => {
     for (const [prefix, raw] of Object.entries(entries)) {
       localStorage.setItem(prefix + source, raw)
       localStorage.setItem(prefix + canonical, prefix === 'halo_session_' ? '' : 'canonical-state')
     }
+    const remove = vi.spyOn(Storage.prototype, 'removeItem')
     migrateWorkspaceUiState(source, canonical)
-    for (const prefix of Object.keys(entries)) {
+    for (const [prefix, raw] of Object.entries(entries)) {
       expect(localStorage.getItem(prefix + canonical)).toBe(prefix === 'halo_session_' ? '' : 'canonical-state')
-      expect(localStorage.getItem(prefix + source)).toBeNull()
+      expect(localStorage.getItem(prefix + source)).toBe(raw)
     }
+    expect(remove).not.toHaveBeenCalled()
+  })
+  it('frees the old layout before writing canonical so both entries need not fit at once', () => {
+    const raw = entries['halo_tabs:']
+    localStorage.setItem('halo_tabs:' + source, raw)
+    const originalSet = Storage.prototype.setItem
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === 'halo_tabs:' + canonical && localStorage.getItem('halo_tabs:' + source) !== null) {
+        throw new DOMException('Storage full', 'QuotaExceededError')
+      }
+      originalSet.call(this, key, value)
+    })
+    migrateWorkspaceUiState(source, canonical)
+    expect(localStorage.getItem('halo_tabs:' + canonical)).toBe(raw)
+    expect(localStorage.getItem('halo_tabs:' + source)).toBeNull()
+    expect(set).toHaveBeenCalledTimes(1)
+  })
+  it('restores the original raw on quota failure and retains it if canonical later exists', () => {
+    const raw = JSON.stringify({ groups: [{ tabs: [{ kind: 'extension', path: canvasKey(view), extensionView: view }], activeTab: canvasKey(view) }] })
+    const oldKey = 'halo_tabs:' + source
+    const newKey = 'halo_tabs:' + canonical
+    localStorage.setItem(oldKey, raw)
+    const originalSet = Storage.prototype.setItem
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === newKey) {
+        expect(localStorage.getItem(oldKey)).toBeNull()
+        throw new DOMException('Storage full', 'QuotaExceededError')
+      }
+      originalSet.call(this, key, value)
+    })
+    migrateWorkspaceUiState(source, canonical)
+    expect(localStorage.getItem(oldKey)).toBe(raw)
+    expect(localStorage.getItem(newKey)).toBeNull()
+    expect(set).toHaveBeenLastCalledWith(oldKey, raw)
+    set.mockRestore()
+    const emptyLayout = JSON.stringify({ groups: [] })
+    localStorage.setItem(newKey, emptyLayout)
+    migrateWorkspaceUiState(source, canonical)
+    expect(localStorage.getItem(oldKey)).toBe(raw)
+    expect(localStorage.getItem(newKey)).toBe(emptyLayout)
   })
   it('does no storage work when the resolved path is unchanged', () => {
     const get = vi.spyOn(Storage.prototype, 'getItem')

@@ -36,11 +36,19 @@ export function migrateWorkspaceUiState(source: string, canonical: string): void
       const newKey = prefix + canonical
       const raw = localStorage.getItem(oldKey)
       if (raw === null) continue
-      if (localStorage.getItem(newKey) === null) {
-        localStorage.setItem(newKey, prefix === 'halo_tabs:' ? canonicalCanvasLayout(raw, source, canonical) : raw)
-      }
+      // Existing canonical state may follow an earlier failed migration; retain
+      // the old key rather than discarding the only remaining copy of its data.
+      if (localStorage.getItem(newKey) !== null) continue
+      const value = prefix === 'halo_tabs:' ? canonicalCanvasLayout(raw, source, canonical) : raw
+      // Free the old entry first so moving a large layout needs no duplicate
+      // quota. If writing the canonical entry fails, put the original raw back.
       localStorage.removeItem(oldKey)
-    } catch { /* Storage unavailable/full: a failed copy leaves the old key intact. */ }
+      try {
+        localStorage.setItem(newKey, value)
+      } catch {
+        localStorage.setItem(oldKey, raw)
+      }
+    } catch { /* Storage unavailable: workspace opening remains best-effort. */ }
   }
   // Cross-workspace Open carries a view through reload rather than a path-keyed
   // entry. Bind it to the same resolved workspace before the editor consumes it.

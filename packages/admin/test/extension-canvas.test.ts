@@ -90,16 +90,20 @@ describe('typed file-less tabs', () => {
 })
 
 describe('Canvas host and editor', () => {
-  it('resolve migrates symlink state before the canonical editor restores it', async () => {
+  it.each(['', '/', '/.', '/child/..'])('resolve migrates symlink state ending in "%s" before the canonical editor restores it', async (suffix) => {
     const source = '/workspace-link'
+    window.history.replaceState({}, '', '/')
     const oldView = { ...view, projectId: source }
     localStorage.setItem('halo_tabs:' + source, JSON.stringify({ groups: [{ tabs: [
       { path: 'a.ts' }, { kind: 'extension', path: canvasKey(oldView), extensionView: oldView },
     ], activeTab: canvasKey(oldView) }], activeGroupIdx: 0 }))
     localStorage.setItem('halo_chat_tabs_' + source, JSON.stringify({ active: 'child' }))
     useProjectStore.setState({ activeProject: null })
-    vi.spyOn(api.fs, 'home').mockResolvedValue({ home: source })
-    vi.spyOn(api.fs, 'resolveWorkspace').mockResolvedValue({ path: view.projectId, id: 'workspace' })
+    vi.spyOn(api.fs, 'home').mockResolvedValue({ home: source + suffix })
+    vi.spyOn(api.fs, 'resolveWorkspace').mockImplementation(async (target) => {
+      expect(target).toBe(source + suffix)
+      return { path: view.projectId, id: 'workspace', ...(suffix ? { requestedPath: source } : {}) }
+    })
     vi.spyOn(api.files, 'tree').mockResolvedValue({ projectId: view.projectId, root: 'workspace', path: '', tree: [] })
     const read = vi.spyOn(api.files, 'read').mockResolvedValue({ path: 'a.ts', content: 'a', size: 1, modifiedAt: 1, createdAt: 1 })
     const opened = vi.fn((s) => {

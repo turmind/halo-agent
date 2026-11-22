@@ -732,7 +732,8 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
   app.post('/fs/workspace/resolve', async (c) => {
     const body = await c.req.json<{ path: string }>()
     if (!body.path) return c.json({ error: 'path required' }, 400)
-    let resolved = path.resolve(body.path)
+    const requestedPath = path.resolve(body.path)
+    let resolved = requestedPath
     // Guard the scaffolding write below (ensureWorkspaceHalo seeds a full
     // `.halo/` tree): only a real directory that isn't a filesystem root can
     // become a workspace. Previously any *existing* path qualified — a file
@@ -755,7 +756,7 @@ export function createFileRoutes(opts: { folderZipLimits?: FolderZipLimits } = {
     }
     const { ensureWorkspaceHalo } = await import('../init.js')
     ensureWorkspaceHalo(resolved)
-    return c.json({ id: resolved, path: resolved })
+    return c.json({ id: resolved, path: resolved, requestedPath })
   })
 
   // GET /fs/exists?path=/abs — check if a path exists and is a directory
