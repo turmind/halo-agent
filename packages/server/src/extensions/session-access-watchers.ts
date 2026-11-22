@@ -54,6 +54,17 @@ export class ExtensionAccessWatchers {
     }
   }
 
+  unwatchWorkspace(projectId: string): void {
+    for (const name of ['skills', 'agents']) {
+      const root = path.join(projectId, '.halo', name)
+      const entry = this.roots.get(root)
+      if (!entry) continue
+      for (const watcher of entry.watchers) watcher.close()
+      if (entry.timer) clearTimeout(entry.timer)
+      this.roots.delete(root)
+    }
+  }
+
   close(): void {
     for (const entry of this.roots.values()) {
       for (const watcher of entry.watchers) watcher.close()

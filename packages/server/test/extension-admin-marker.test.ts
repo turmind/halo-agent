@@ -13,6 +13,12 @@ import { ExtensionSessionAccess } from '../src/extensions/session-access.js'
 import { broadcastToWorkspace, setBroadcastWss } from '../src/ws/broadcast.js'
 import { dispatchCommand, type CommandContext } from '../src/channels/shared/commands.js'
 
+const fixture = vi.hoisted(() => ({ access: null as ExtensionSessionAccess | null }))
+vi.mock('../src/extensions/session-access.js', async (original) => ({
+  ...await original<typeof import('../src/extensions/session-access.js')>(),
+  get extensionSessionAccess() { return fixture.access },
+}))
+
 let root: string
 let workspace: string
 let other: string
@@ -64,6 +70,7 @@ beforeEach(async () => {
   }
   // Real A broker + B notices + Admin ingress; only model execution/IPC is stubbed.
   access = new ExtensionSessionAccess(async (projectId, sessionId) => ({ projectId, sessionId, rootSessionId: 'root', agentId: 'fixture', extensionIds: ['ext'] }))
+  fixture.access = access
   accepted = vi.fn((projectId, sessionId) => { order.push('human'); return access.acceptAdminInput(projectId, sessionId) })
   sendToGeneration = vi.fn(() => true)
   notices = createExtensionNotices({ access, backends: { sendToGeneration }, broadcast: broadcastToWorkspace, lookup: () => ({
@@ -176,6 +183,63 @@ describe('authenticated Admin ingress integration', () => {
     expect(sendToGeneration.mock.calls.filter(([, , m]) => m.type === 'halo:notice:result')).toHaveLength(1)
     expect(accepted).not.toHaveBeenCalled()
     expect(order).toEqual([])
+  })
+
+  it.each(['offline', 'manual-compact', 'running'])('chat:stop revokes the DB subtree, bearer and Admin connections and pending consent (%s)', async (mode) => {
+    const sm = registry.getOrCreate(workspace)
+    const grandchild = `${sid}>leaf`
+    sm.getDb().insert(agentSessions).values({ id: grandchild, parentId: sid, agentId: 'fixture', createdAt: 1000, updatedAt: 1000 }).run()
+    const auths: string[] = [], signals: AbortSignal[] = []
+    for (const id of ['root', sid, grandchild]) {
+      const shell = await access.shellContext(workspace, id)
+      const auth = `Bearer ${JSON.parse(shell.env.HALO_EXT_BACKENDS).ext.accessKey}`
+      auths.push(auth)
+      signals.push(access.bindSession('ext', 'generation', auth).signal)
+      signals.push((await access.bindAdmin('ext', 'generation', { projectId: workspace, sessionId: id })).signal)
+    }
+    const sibling = await access.shellContext(other, sid)
+    const siblingAuth = `Bearer ${JSON.parse(sibling.env.HALO_EXT_BACKENDS).ext.accessKey}`
+    // The manager and broker are real; only the model/compact state is synthetic.
+    if (mode !== 'offline') {
+      const controller = new AbortController()
+      const compacting = mode === 'manual-compact'
+      const session = { id: 'root', parentId: null, agent: { messages: [] }, messageQueue: [],
+        abortController: compacting ? null : controller, promise: compacting ? null : Promise.resolve(''),
+        isCompacting: compacting, selfKick: true, interruptRequested: false }
+      ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('root', session)
+      vi.spyOn(sm, 'cancelCompact').mockImplementation(() => { controller.abort() })
+      signals.push(controller.signal)
+    }
+    const a = await connect()
+    await barrier(a)
+    post()
+    a.send({ type: 'chat:stop', sessionId: 'root' })
+    await vi.waitFor(() => expect(a.frames).toContainEqual({ type: 'chat:stopped', sessionId: 'root' }))
+    expect(signals.every((signal) => signal.aborted)).toBe(true)
+    for (const auth of auths) expect(() => access.validate('ext', auth)).toThrow()
+    for (const id of ['root', sid, grandchild]) expect(await access.shellContext(workspace, id)).toEqual({ env: {}, secrets: [] })
+    expect(() => access.validate('ext', siblingAuth)).not.toThrow()
+    expect(access.getBinding('ext', 'generation', bindingId)).toBeNull()
+    expect(a.frames).toContainEqual({ type: 'extension:notice:resolved', extensionId: 'ext', generation: 'generation', id: 'copy', decision: 'withdrawn' })
+    a.send(respond)
+    await barrier(a)
+    expect(a.frames).not.toContainEqual({ type: 'extension:notice:response', extensionId: 'ext', generation: 'generation', id: 'copy', status: 'accepted' })
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.delete('root')
+  })
+
+  it('uses the canonical socket workspace for symlink notice push, reconnect snapshot and response', async () => {
+    const link = path.join(root, 'alias')
+    fs.symlinkSync(workspace, link, 'dir')
+    const a = await connect(), otherClient = await connect()
+    await barrier(a, link); await barrier(otherClient, other)
+    post()
+    await vi.waitFor(() => expect(a.frames.some((f) => f.type === 'extension:notice')).toBe(true))
+    expect(otherClient.frames.some((f) => f.type === 'extension:notice')).toBe(false)
+    const reconnected = await connect()
+    await barrier(reconnected, link)
+    expect(reconnected.frames).toContainEqual(expect.objectContaining({ type: 'extension:notice:snapshot', projectId: workspace, notices: [expect.objectContaining({ sessionId: sid })] }))
+    reconnected.send(respond)
+    await vi.waitFor(() => expect(reconnected.frames).toContainEqual({ type: 'extension:notice:response', extensionId: 'ext', generation: 'generation', id: 'copy', status: 'accepted' }))
   })
 
   it.each(['session-stopped', 'shutdown'] as const)('withdraws through the real A broker on %s before accepting a queued answer', async (reason) => {

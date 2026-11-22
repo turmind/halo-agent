@@ -148,6 +148,15 @@ describe('POST /fs/workspace/resolve guards (B-M2)', () => {
     expect(res.status).toBe(404)
   })
 
+  it('returns the canonical identity for a symlink workspace and rejects a link to root', async () => {
+    const link = path.join(ws, 'workspace-link'), rootLink = path.join(ws, 'root-link')
+    fs.symlinkSync(ws, link, 'dir')
+    fs.symlinkSync(path.parse(ws).root, rootLink, 'dir')
+    const res = await resolve(link)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ id: fs.realpathSync(ws), path: fs.realpathSync(ws) })
+    expect((await resolve(rootLink)).status).toBe(400)
+  })
   it('accepts a real directory and scaffolds .halo/', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-resolve-ok-'))
     try {

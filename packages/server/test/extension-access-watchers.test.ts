@@ -81,6 +81,12 @@ describe('effective provenance and external invalidation', () => {
     if (reason === 'unconfirmed') state.dropBackendConfirmations(['browser'])
     expect(await issue()).toBeUndefined()
   })
+  it('invalidates a negative entitlement when a disabled shipped skill is enabled externally', async () => {
+    write(path.join(extDir, 'skills/browser/SKILL.md'), '---\ndisable-model-invocation: true\n---\nfixture')
+    expect(await issue()).toBeUndefined()
+    write(path.join(extDir, 'skills/browser/SKILL.md'), skillBody)
+    await vi.waitFor(async () => expect(await issue()).toBeDefined(), { timeout: 3000 })
+  })
   it.each(['agent', 'workspace-override', 'global-override', 'shipped-skill'])('revokes on external %s edits without Admin watchers', async (what) => {
     const entry = (await issue())!
     if (what === 'agent') write(agentFile, agentYaml.replace('shell_exec', 'file_read'))
