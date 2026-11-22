@@ -22,6 +22,14 @@ Monaco-based multi-tab code editor + binary file previewer — surfaced in the U
 - The tab bar's **Split right** button opens a second pane (two at most); each pane has its own tabs, Edit/Preview and Diff state
 - Tabs that don't fit scroll sideways — a horizontal trackpad swipe / Shift+wheel over the bar, or the ‹ › arrows at its edges (shown only when there is more to that side); no visible scrollbar
 
+### File-less extension Canvas tabs
+- An extension with a manifest `canvas` declaration opens a live application tab, alongside file tabs, without creating a backing file. Its icon is the extension's Canvas icon (a puzzle when absent); title uses the Open action's title, then localized Canvas title, then extension name.
+- **Settings → Extensions → Open in Canvas** opens the default view in the active workspace. A user-uploaded install opens after any required backend confirmation; watcher/skill installs do not open automatically. Without a workspace, Open is disabled. An unconfirmed backend shows the existing **confirm in Settings** notice, never an iframe.
+- A tab is identified by extension, view, canonical workspace path and optional exact session, including child sessions. Reopening focuses that tab; split, move, reorder and close work as for other Canvas tabs. Only this routing metadata and an optional title persist with the pane layout; reload restores the tab without a file read. No Save, Download, Open as text, Diff, Monaco model or file-refresh requests apply, and no fake file path is attached to chat context.
+- The iframe runs only while its pane displays the tab and the Canvas page is visible. Leaving it unmounts the iframe; returning opens a fresh host. A removed, disabled, broken or platform-excluded extension shows unavailable rather than stale code. Existing file viewers retain their existing keep-alive rules.
+- Maximize supports immersive Canvas on desktop and phone. A compact toolbar keeps **Back to chat** (for session-bound tabs) and the immersive exit visible. Back to chat and the iframe's `focus-chat` request exit immersive and focus the host-provided session's chat input; they never send a message or signify confirmation. On phone, Open navigates to Canvas and Back navigates to Chat.
+- [Extension notices](chat.md#extension-notices) can open the same tabs. Cross-workspace Open uses the workspace-switch unsaved-change guard, including unsaved files in either split pane, before navigating.
+
 ### Save
 - `Cmd+S` / `Ctrl+S` calls `PUT /api/files`
 - Server returns the new `modifiedAt`; the tab updates its mtime
