@@ -1,4 +1,14 @@
 export const en: Record<string, string> = {
+  'extensions.canvas.open': 'Open in Canvas',
+  'extensions.canvas.unavailable': 'This Canvas extension is unavailable. Check Settings → Extensions.',
+  'extensions.notices.title': 'Extension notices',
+  'extensions.notices.open': 'Open',
+  'extensions.notices.dismiss': 'Dismiss (does not answer)',
+  'extensions.notices.session': 'Session',
+  'extensions.notices.expires': 'Expires at {time}',
+  'extensions.notices.pending': 'Waiting for the server…',
+  'extensions.notices.reconnecting': 'Reconnect to this workspace before answering.',
+  'extensions.notices.denied': 'The server declined this answer. Check the workspace or reopen the view.',
   // ── Channels sidebar ──
   'channels.wechat': 'WeChat',
   'channels.observerAdminOnly': 'Observer (set by admin)',

@@ -1,7 +1,9 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useScopedEditorStore, useEditorStore as useGlobalEditorStore, disposeMonacoModels, monacoModelPath, type EditorBuffer } from '@/shared/stores/editor-store'
+import { useScopedEditorStore, useEditorStore as useGlobalEditorStore, canvasBuffer, disposeMonacoModels, monacoModelPath, type EditorBuffer } from '@/shared/stores/editor-store'
+import { ExtensionCanvasPanel } from '@/features/extensions/canvas-panel'
+import { canvasKey, isCanvasKey, isCanvasView, PENDING_CANVAS_KEY, type CanvasView } from '@/features/extensions/canvas-logic'
 import { useFileTree, loadFileTree } from '@/features/explorer/use-file-tree'
 import { FileTree, setPathExpanded, isPathExpanded, collectVisiblePaths, type FileContextInfo } from '@/features/explorer/file-tree'
 import { FileContextMenu, type ContextMenuAction } from '@/features/explorer/file-context-menu'
@@ -131,7 +133,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   const t = useT()
   const useEditorStore = useScopedEditorStore()
   const tabs = useEditorStore((s) => s.tabs)
-  const activeTab = useEditorStore((s) => s.activeTab)
+  const activeTab = useEditorStore((s) => s.groups[s.activeGroupIdx]?.activeTab ?? null)
   const buffers = useEditorStore((s) => s.buffers)
   const groups = useEditorStore((s) => s.groups)
   const activeGroupIdx = useEditorStore((s) => s.activeGroupIdx)
@@ -246,11 +248,22 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     useEditorStore.getState().setModelPathPrefix(projectId ?? null)
   }, [projectId, useEditorStore])
 
-  // Clear tabs and restore from localStorage when project changes
+  // The editor owns restore; its tree-only sibling shares the store but must
+  // not race a second async restore against a newly opened Canvas tab.
   useEffect(() => {
-    if (!projectId) return
+    if (!projectId || mode === 'tree-only') return
+    if (useEditorStore.getState().restoredProjectId === projectId) {
+      prevProjectRef.current = projectId
+      setTabsRestored(true)
+      return
+    }
+    const restored = () => {
+      useEditorStore.setState({ restoredProjectId: projectId })
+      setTabsRestored(true)
+    }
 
     // On project switch, clear editor state first
+    prevProjectRef.current ??= useEditorStore.getState().restoredProjectId
     if (prevProjectRef.current && prevProjectRef.current !== projectId) {
       // Models were created under the old project's prefix — release them
       // before the wholesale buffer reset below orphans them.
@@ -274,7 +287,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     const key = `halo_tabs:${projectId}`
     const saved = localStorage.getItem(key)
     if (!saved) {
-      setTabsRestored(true)
+      restored()
       return
     }
 
@@ -283,7 +296,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       try {
         const parsed = JSON.parse(saved!) as {
           // New shape (multi-pane): { groups: [{ tabs: [{path, ...}], activeTab }], activeGroupIdx }
-          groups?: Array<{ tabs: Array<{ path: string; isPreview?: boolean; bundle?: boolean; readOnly?: boolean; language?: string }>; activeTab: string | null }>
+          groups?: Array<{ tabs: Array<{ path: string; kind?: 'extension'; extensionView?: CanvasView; isPreview?: boolean; bundle?: boolean; readOnly?: boolean; language?: string }>; activeTab: string | null }>
           activeGroupIdx?: number
           // Legacy shape: { tabs: [{path, ...}], activeTab }
           tabs?: Array<{ path: string; isPreview?: boolean; language?: string }>
@@ -291,10 +304,10 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         }
         // Normalize to the multi-pane shape so the rest of the function only
         // deals with one path. Old single-pane state becomes a 1-group restore.
-        const groupsToRestore: Array<{ tabs: Array<{ path: string; isPreview?: boolean; bundle?: boolean; readOnly?: boolean; language?: string }>; activeTab: string | null }> =
+        const groupsToRestore: Array<{ tabs: Array<{ path: string; kind?: 'extension'; extensionView?: CanvasView; isPreview?: boolean; bundle?: boolean; readOnly?: boolean; language?: string }>; activeTab: string | null }> =
           parsed.groups ?? (parsed.tabs ? [{ tabs: parsed.tabs, activeTab: parsed.activeTab ?? null }] : [])
         const restoredActiveGroupIdx = parsed.activeGroupIdx ?? 0
-        if (groupsToRestore.length === 0) { setTabsRestored(true); return }
+        if (groupsToRestore.length === 0) { restored(); return }
 
         // Collect every distinct path across groups and fetch each buffer
         // exactly once — same file in two panes shares a single buffer.
@@ -302,7 +315,9 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         const langByPath = new Map<string, string | undefined>()
         const bundlePaths = new Set<string>()
         const readOnlyPaths = new Set<string>()
+        const canvasTabs = new Map<string, CanvasView | undefined>()
         for (const g of groupsToRestore) for (const t of g.tabs) {
+          if (t.kind === 'extension' || isCanvasKey(t.path)) canvasTabs.set(t.path, t.extensionView)
           if (!langByPath.has(t.path)) langByPath.set(t.path, t.language)
           if (t.bundle) bundlePaths.add(t.path)
           if (t.readOnly) readOnlyPaths.add(t.path)
@@ -310,6 +325,10 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
 
         const fetched = await Promise.all(
           allPaths.map(async (path) => {
+            if (canvasTabs.has(path)) {
+              const view = canvasTabs.get(path)
+              return isCanvasView(view, projectId!) && canvasKey(view) === path ? canvasBuffer(view) : null
+            }
             // Outside the workspace: reopen the way the path link opened it.
             if (readOnlyPaths.has(path)) {
               try {
@@ -390,16 +409,16 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
             groups: restoredGroups,
             activeGroupIdx,
             tabs: derivedTabs,
-            activeTab: activeGroup.activeTab,
+            activeTab: activeGroup.activeTab && buffers[activeGroup.activeTab]?.kind === 'extension' ? null : activeGroup.activeTab,
           })
         }
       } catch { /* stale tab state → start clean */ }
-      if (!cancelled) setTabsRestored(true)
+      if (!cancelled) restored()
     }
 
     restore()
     return () => { cancelled = true }
-  }, [projectId])
+  }, [projectId, mode])
 
   // Persist groups (multi-pane tab layout) to localStorage. Older saves
   // used `{ tabs, activeTab }`; restore() understands both shapes.
@@ -411,12 +430,41 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     const persistedGroups = groups.map((g) => ({
       tabs: g.tabs.filter((p) => p !== pinnedTab).map((p) => {
         const buf = buffers[p]
+        if (buf?.kind === 'extension') return { path: p, kind: 'extension', extensionView: buf.extensionView }
         return { path: p, isPreview: !!buf?.preview, ...(buf?.preview?.bundle ? { bundle: true } : {}), ...(buf?.readOnly ? { readOnly: true } : {}), language: buf?.language }
       }),
       activeTab: g.activeTab === pinnedTab ? null : g.activeTab,
     }))
     localStorage.setItem(`halo_tabs:${projectId}`, JSON.stringify({ groups: persistedGroups, activeGroupIdx }))
   }, [groups, activeGroupIdx, buffers, projectId, tabsRestored, pinnedTab])
+
+  // Open only after restore, otherwise a slow file fetch could replace the new tab.
+  const pendingCanvas = useRef<CanvasView | null>(null)
+  useEffect(() => {
+    if (mode === 'tree-only' || useEditorStore !== useGlobalEditorStore) return
+    const receive = (event: Event) => {
+      const view = (event as CustomEvent).detail
+      if (!projectId || !isCanvasView(view, projectId)) return
+      if (tabsRestored) useEditorStore.getState().openExtension(view)
+      else pendingCanvas.current = view
+    }
+    window.addEventListener('halo:canvas-ready-open', receive)
+    if (tabsRestored && pendingCanvas.current) {
+      useEditorStore.getState().openExtension(pendingCanvas.current)
+      pendingCanvas.current = null
+    }
+    if (tabsRestored && projectId) {
+      const raw = sessionStorage.getItem(PENDING_CANVAS_KEY)
+      if (raw) {
+        sessionStorage.removeItem(PENDING_CANVAS_KEY)
+        try {
+          const pending = JSON.parse(raw)
+          if (isCanvasView(pending.view, projectId)) window.dispatchEvent(new CustomEvent(pending.chat ? 'halo:extension-chat' : 'halo:extension-canvas', { detail: pending.view }))
+        } catch { /* corrupt navigation metadata */ }
+      }
+    }
+    return () => window.removeEventListener('halo:canvas-ready-open', receive)
+  }, [projectId, mode, tabsRestored, useEditorStore])
 
   // Face toggle → the pinned face tab (main editor only; scoped Skills /
   // Agents editors never host it). Runs after the tab restore so the restore's
@@ -605,7 +653,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   }, [useEditorStore])
 
   const handleOpenAsText = useCallback(async (filePath: string) => {
-    if (!projectId) return
+    if (!projectId || isCanvasKey(filePath)) return
     // A file outside the workspace: the workspace-only GET /files would 403, so
     // read it like a path-link open (absolute routes) — and say why when it can't.
     if (useEditorStore.getState().buffers[filePath]?.readOnly) {
@@ -638,7 +686,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
       const savePath = path ?? activeTab
       if (!savePath || !projectId) return
       const tab = useEditorStore.getState().tabs.find((t) => t.path === savePath)
-      if (!tab || !tab.modified || tab.readOnly) return
+      if (!tab || tab.kind === 'extension' || !tab.modified || tab.readOnly) return
       // A bundle tab's "modified" is its extension's busy flag — nothing to save.
       if (tab.preview?.bundle) return
       // Extension preview tabs keep their content inside the iframe; the host
@@ -658,7 +706,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   const handleViewDiff = useCallback(
     (groupId: string, path: string) => {
       const buf = useEditorStore.getState().buffers[path]
-      if (!buf) return
+      if (!buf || buf.kind === 'extension') return
       setDiffByGroup((prev) => ({ ...prev, [groupId]: { original: buf.originalContent, modified: buf.content, path } }))
     },
     [],
@@ -1361,6 +1409,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                       {(() => {
                         const paneDiff = diffByGroup[group.id]
                         const paneRender = getRenderMode(group.id)
+                        if (paneFile?.kind === 'extension') return <ExtensionCanvasPanel key={paneFile.path} view={paneFile.extensionView} />
                         if (paneFile?.preview) return null
                         if (paneDiff) return (
                           <div className="h-full flex flex-col">

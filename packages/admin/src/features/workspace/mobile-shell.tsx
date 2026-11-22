@@ -4,6 +4,9 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ExtensionInfo } from '@turmind/halo-core/protocol'
 import { ChevronLeft, ChevronRight, FolderTree, LayoutGrid, List, Maximize, MessageCircle, MessageSquare, Plus } from 'lucide-react'
 import { EditorPanel } from '@/features/editor/editor-panel'
+import { CanvasVisible } from '@/features/extensions/canvas-panel'
+import { canvasTitle } from '@/features/extensions/canvas-logic'
+import { canvasEntry, useRegistryVersion } from '@/features/editor/previews/registry'
 import { armImmersiveFullscreen, useImmersive, useImmersiveOffered } from '@/features/editor/immersive'
 import { AgentSessionsSidebar } from '@/features/agents/agent-sessions-sidebar'
 import { SessionChatPanel } from '@/features/agents/session-chat-panel'
@@ -27,7 +30,7 @@ import { useExplorerSessions } from '@/features/chat/session-list'
 import { LONG_PRESS_MS } from '@/features/chat/session-context-menu'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { useT } from '@/shared/i18n'
+import { useI18n, useT } from '@/shared/i18n'
 import { cn, formatRelativeTime } from '@/shared/utils'
 
 /** One row of the More page: a built-in page, an extension page or the terminal. */
@@ -76,7 +79,7 @@ interface MobileShellProps {
  * section) and moves to the detail when a row it holds becomes selected.
  */
 export function MobileShell({ entries, extensions, quickToggles, explorer, projectId, bottomSlotRef }: MobileShellProps) {
-  const t = useT()
+  const { t, lang } = useI18n()
   const [view] = useState(initialView)
   const [tab, setTab] = useState<Tab>(view === 'canvas' ? 'files' : view)
   const [filesView, setFilesView] = useState<'tree' | 'canvas'>(view === 'canvas' ? 'canvas' : 'tree')
@@ -88,7 +91,9 @@ export function MobileShell({ entries, extensions, quickToggles, explorer, proje
   const [sheet, setSheet] = useState(false)
   const immersive = useImmersive()
   const immersiveOffered = useImmersiveOffered()
-  const activeFile = useEditorStore((s) => s.activeTab)
+  const activeFile = useEditorStore((s) => s.groups[s.activeGroupIdx]?.activeTab)
+  const activeBuffer = useEditorStore((s) => { const key = s.groups[s.activeGroupIdx]?.activeTab; return key ? s.buffers[key] : undefined })
+  useRegistryVersion()
   const project = useProjectStore((s) => s.activeProject)
 
   const openPage = (id: string | null) => {
@@ -222,7 +227,7 @@ export function MobileShell({ entries, extensions, quickToggles, explorer, proje
     top = (
       <TopBar
         onBack={() => setFilesView('tree')}
-        title={activeFile ? activeFile.split('/').pop() : t('nav.canvas')}
+        title={activeBuffer?.kind === 'extension' ? canvasTitle(canvasEntry(activeBuffer.extensionView.extensionId), lang, activeBuffer.extensionView) : activeFile ? activeFile.split('/').pop() : t('nav.canvas')}
         actions={immersiveOffered && (
           <IconButton
             label={t('mobile.fullscreen')}
@@ -281,7 +286,7 @@ export function MobileShell({ entries, extensions, quickToggles, explorer, proje
           {explorer}
         </div>
         <div data-m="canvas" className={cn('h-full', !(tab === 'files' && filesView === 'canvas') && 'hidden')}>
-          <EditorPanel projectId={projectId} mode="editor-only" />
+          <CanvasVisible.Provider value={onCanvas}><EditorPanel projectId={projectId} mode="editor-only" /></CanvasVisible.Provider>
         </div>
 
         {sessionsMounted && (

@@ -13,9 +13,13 @@ import {
   Pencil,
   GitCompareArrows,
   Lock,
+  Puzzle,
 } from 'lucide-react'
 import { getFileIcon } from '@/shared/file-icons'
-import { useT } from '@/shared/i18n'
+import { useI18n } from '@/shared/i18n'
+import { canvasTitle } from '@/features/extensions/canvas-logic'
+import { canvasEntry, useRegistryVersion } from './previews/registry'
+import { ExtensionMaskIcon } from './previews/extension-icon'
 
 // ── Disambiguate same-name tabs ─────────────────────────────────────
 
@@ -157,7 +161,8 @@ interface DragPayload {
 }
 
 export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, renderMode, onToggleRenderMode, showDiffButton, onToggleDiff }: TabBarProps) {
-  const t = useT()
+  const { t, lang } = useI18n()
+  useRegistryVersion()
   const useEditorStore = useScopedEditorStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [showLeft, setShowLeft] = useState(false)
@@ -318,9 +323,11 @@ export function TabBar({ tabs, activeTab, groupIdx, canSplit, onCloseTab, render
               {showDropLeft && <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-[var(--primary)]" />}
               {showDropRight && <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-[var(--primary)]" />}
 
-              <Icon className={cn('h-3.5 w-3.5 shrink-0', color)} />
-              <span className="max-w-40 truncate" title={tab.readOnly ? `${tab.path} · ${t('pathLink.readOnly')}` : undefined}>
-                {labels.get(tab.path) ?? tab.path.split('/').pop()}
+              {tab.kind === 'extension'
+                ? (() => { const info = canvasEntry(tab.extensionView.extensionId); return info ? <ExtensionMaskIcon info={info} icon={info.canvas?.icon} fallback={Puzzle} className="h-3.5 w-3.5 shrink-0" /> : <Puzzle className="h-3.5 w-3.5 shrink-0" /> })()
+                : <Icon className={cn('h-3.5 w-3.5 shrink-0', color)} />}
+              <span className="max-w-40 truncate" title={tab.kind === 'extension' ? `${tab.extensionView.extensionId} · ${tab.extensionView.projectId}${tab.extensionView.sessionId ? ` · ${tab.extensionView.sessionId}` : ''}` : tab.readOnly ? `${tab.path} · ${t('pathLink.readOnly')}` : undefined}>
+                {tab.kind === 'extension' ? canvasTitle(canvasEntry(tab.extensionView.extensionId), lang, tab.extensionView) : labels.get(tab.path) ?? tab.path.split('/').pop()}
               </span>
               {tab.readOnly && <Lock className="h-3 w-3 shrink-0 opacity-60" aria-label={t('pathLink.readOnly')} />}
               {tab.path === pinnedTab ? null : tab.modified ? (

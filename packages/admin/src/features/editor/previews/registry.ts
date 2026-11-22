@@ -84,6 +84,10 @@ export function loadExtensions(): Promise<void> {
   return initialLoad
 }
 
+export function canvasEntry(id: string): ExtensionInfo | undefined {
+  return snapshot.extensions.find((e) => e.id === id && e.canvas && runsHere(e))
+}
+
 export function getExtensionsSnapshot(): ExtensionsSnapshot {
   return snapshot
 }

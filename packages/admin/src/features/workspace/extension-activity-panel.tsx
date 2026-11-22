@@ -64,13 +64,16 @@ interface PageFrameProps {
   onFrame: (state: ActivityState, frame: ExtensionClientFrame, ctx: ActivityContext) => PageStep
   onInsert?: (text: string) => void
   onBusy?: (busy: boolean) => void
+  onFocusChat?: () => void
+  onImmersive?: (on: boolean) => void
+  immersive?: boolean
   closeRequested?: boolean
   /** Console prefix: `[<logTag>] <id>: …`. */
   logTag: string
   compact?: boolean
 }
 
-function PageFrame({ info, title, onFrame, onInsert, onBusy, closeRequested = false, logTag, compact = false }: PageFrameProps) {
+function PageFrame({ info, title, onFrame, onInsert, onBusy, onFocusChat, onImmersive, immersive, closeRequested = false, logTag, compact = false }: PageFrameProps) {
   const { t, lang } = useI18n()
   const { theme } = useTheme()
   // Same DOM-change signal as extension-host.tsx: `theme` is when the palette
@@ -98,7 +101,8 @@ function PageFrame({ info, title, onFrame, onInsert, onBusy, closeRequested = fa
   const onFrameRef = useRef(onFrame)
   const onInsertRef = useRef(onInsert)
   const onBusyRef = useRef(onBusy)
-  useEffect(() => { ctxRef.current = ctx; onFrameRef.current = onFrame; onInsertRef.current = onInsert; onBusyRef.current = onBusy })
+  const canvasRef = useRef({ onFocusChat, onImmersive, immersive })
+  useEffect(() => { ctxRef.current = ctx; onFrameRef.current = onFrame; onInsertRef.current = onInsert; onBusyRef.current = onBusy; canvasRef.current = { onFocusChat, onImmersive, immersive } })
 
   const run = useCallback((step: PageStep) => {
     stateRef.current = step.state
@@ -122,6 +126,12 @@ function PageFrame({ info, title, onFrame, onInsert, onBusy, closeRequested = fa
           break
         case 'busy':
           onBusyRef.current?.(eff.busy)
+          break
+        case 'focus-chat':
+          canvasRef.current.onFocusChat?.()
+          break
+        case 'immersive':
+          canvasRef.current.onImmersive?.(eff.on)
           break
       }
     }
@@ -155,6 +165,9 @@ function PageFrame({ info, title, onFrame, onInsert, onBusy, closeRequested = fa
       if (e.source !== iframeRef.current?.contentWindow) return
       if (!isClientFrame(e.data)) return
       run(onFrameRef.current(stateRef.current, e.data, ctxRef.current))
+      if (e.data.type === 'ready' && canvasRef.current.immersive !== undefined) {
+        iframeRef.current?.contentWindow?.postMessage({ haloExt: 1, type: 'immersive', on: canvasRef.current.immersive }, '*')
+      }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
@@ -167,6 +180,11 @@ function PageFrame({ info, title, onFrame, onInsert, onBusy, closeRequested = fa
   useEffect(() => {
     run(onActivityLangChange(stateRef.current, lang))
   }, [lang, run])
+
+  useEffect(() => {
+    if (immersive === undefined || !stateRef.current.ready) return
+    iframeRef.current?.contentWindow?.postMessage({ haloExt: 1, type: 'immersive', on: immersive }, '*')
+  }, [immersive])
 
   useEffect(() => {
     if (!closeRequested) return

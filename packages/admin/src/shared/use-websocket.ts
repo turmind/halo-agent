@@ -9,6 +9,7 @@ import { registerChatHandlers } from '@/shared/ws-handlers/chat-handlers'
 import { registerAgentHandlers } from '@/shared/ws-handlers/agent-handlers'
 import { registerFileHandlers } from '@/shared/ws-handlers/file-handlers'
 import { registerStateHandlers } from '@/shared/ws-handlers/state-handlers'
+import { registerExtensionHandlers } from '@/shared/ws-handlers/extension-handlers'
 
 /** Connection indicator states. `connected` alone reported the LAST KNOWN
  *  state — a zombie-OPEN socket (peer gone, onclose never fired) kept the
@@ -75,6 +76,7 @@ export function useWebSocket() {
       registerAgentHandlers(wsClient),
       registerFileHandlers(wsClient),
       registerStateHandlers(wsClient),
+      registerExtensionHandlers(wsClient),
     ]
 
     // Hard signal from the OS: NIC came back up. Pass `staleMs: 0` so we

@@ -22,10 +22,10 @@ export function isContentChange(action: string): boolean {
  *   reach it), or a bundle directory with no host mounted.
  */
 export function tabRefresh(
-  buf: Pick<EditorBuffer, 'preview' | 'modified' | 'readOnly'> | undefined,
+  buf: Pick<EditorBuffer, 'kind' | 'preview' | 'modified' | 'readOnly'> | undefined,
   opts: { pinned: boolean; hasHost: boolean },
 ): 'none' | 'host' | 'text' | 'preview' {
-  if (!buf || opts.pinned || buf.readOnly) return 'none'
+  if (!buf || buf.kind === 'extension' || opts.pinned || buf.readOnly) return 'none'
   if (!buf.preview) return buf.modified ? 'none' : 'text'
   if (opts.hasHost) return 'host'
   return buf.preview.bundle ? 'none' : 'preview'

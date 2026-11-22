@@ -18,7 +18,10 @@ import { SkillsMain } from '@/features/skills/skills-main'
 import { SessionChatPanel } from '@/features/agents/session-chat-panel'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useChatStore, onTurnSettled } from '@/features/chat/chat-store'
-import { openTab } from '@/features/chat/chat-tabs'
+import { openTab, restoreTabs } from '@/features/chat/chat-tabs'
+import { CanvasVisible } from '@/features/extensions/canvas-panel'
+import { ExtensionNoticeQueue } from '@/features/extensions/notice-queue'
+import { isCanvasView, PENDING_CANVAS_KEY, type CanvasView } from '@/features/extensions/canvas-logic'
 import { exitImmersive, isImmersive, useImmersive } from '@/features/editor/immersive'
 import { listedSessionTitle } from '@/features/chat/session-list'
 import { useEditorStore } from '@/shared/stores/editor-store'
@@ -38,7 +41,7 @@ import { SourceControlSidebar } from '@/features/source-control/source-control-s
 import { SourceControlMain } from '@/features/source-control/source-control-main'
 import { QuickToggles, useQuickToggleItems } from '@/features/workspace/quick-toggles'
 import { MobileShell, type MobileEntry } from '@/features/workspace/mobile-shell'
-import { isMobileViewport, useIsMobile } from '@/shared/use-is-mobile'
+import { useIsMobile } from '@/shared/use-is-mobile'
 import { ActivityBarLabel } from '@/features/workspace/activity-bar-label'
 import { useHoverIntent } from '@/shared/use-hover-intent'
 import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, SquareTerminal } from 'lucide-react'
@@ -150,8 +153,8 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     exitImmersive({ refocus: false })
     openTab(sessionId)
     useEditorStore.getState().setBottomTab('chat')
-    // Phone layout: the chat is a tab of its own (mobile-shell) — go there.
-    if (isMobileViewport()) window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer' } }))
+    // The exact chat must be visible, including the phone's separate Chat tab.
+    window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer' } }))
     // After the un-maximized layout has painted the docked / floating chat.
     requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('halo:focus-chat-input')))
   }
@@ -277,7 +280,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   // shell's Cmd/Ctrl+W bridge.
   const closeActiveTab = useCallback((): boolean => {
     const store = useEditorStore.getState()
-    const activeTab = store.activeTab
+    const activeTab = store.groups[store.activeGroupIdx]?.activeTab
     if (!activeTab) return false
     const tab = store.tabs.find((t) => t.path === activeTab)
     // confirmAction is async (Electron can't block on a native dialog);
@@ -381,6 +384,35 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     return () => window.removeEventListener('halo:open-workspace', handler)
   }, [])
 
+  // Notice attribution and Canvas context, never the currently focused chat.
+  useEffect(() => {
+    const navigate = (event: Event) => {
+      const view = (event as CustomEvent<CanvasView>).detail
+      if (!view || !isCanvasView(view, view.projectId)) return
+      const chat = event.type === 'halo:extension-chat'
+      if (useProjectStore.getState().activeProject?.id !== view.projectId) {
+        void openFolderPath(view.projectId, { view, chat })
+        return
+      }
+      exitImmersive({ refocus: false })
+      useEditorStore.getState().setMaximized(false)
+      restoreTabs(view.projectId)
+      if (view.sessionId) openTab(view.sessionId)
+      if (chat) {
+        if (view.sessionId) backToChat(view.sessionId)
+      } else {
+        window.dispatchEvent(new CustomEvent('halo:canvas-ready-open', { detail: view }))
+        window.dispatchEvent(new CustomEvent('halo:navigate', { detail: { tab: 'explorer', force: true, sidebar: false } }))
+      }
+    }
+    window.addEventListener('halo:extension-canvas', navigate)
+    window.addEventListener('halo:extension-chat', navigate)
+    return () => {
+      window.removeEventListener('halo:extension-canvas', navigate)
+      window.removeEventListener('halo:extension-chat', navigate)
+    }
+  }, [])
+
   // Persist sidebar state to localStorage
   useEffect(() => {
     localStorage.setItem('halo_sidebar_tab', activeTab)
@@ -403,7 +435,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   // navigating would run the whole confirm→reload sequence again, stacking
   // dialogs. Never reset on the success path — the page is about to unload.
   const workspaceJumpInFlight = useRef(false)
-  async function openFolderPath(target: string) {
+  async function openFolderPath(target: string, canvas?: { view: CanvasView; chat: boolean }) {
     const path = target.trim()
     if (!path) return
     if (workspaceJumpInFlight.current) return
@@ -423,7 +455,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     // Deliberate navigation: confirm unsaved edits explicitly (only when any
     // exist), then suppress the generic leave-site warning — without this the
     // browser's beforeunload dialog fires on every switch, unsaved or not.
-    const dirty = useEditorStore.getState().tabs.filter((t) => t.modified)
+    const dirty = Object.values(useEditorStore.getState().buffers).filter((t) => t.modified)
     if (dirty.length > 0) {
       const names = dirty.map((t) => t.path.split('/').pop()).join(', ')
       if (!(await confirmAction(`Unsaved changes in ${names} will be lost. Switch workspace anyway?`))) {
@@ -431,6 +463,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         return
       }
     }
+    if (canvas) sessionStorage.setItem(PENDING_CANVAS_KEY, JSON.stringify(canvas))
     suppressUnloadWarning.current = true
     // Remember this as the last folder BEFORE the reload, so a later launch
     // without ?folder (the desktop app's normal case) reopens here. Without
@@ -599,6 +632,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     ].map(({ id, icon, label, desc }) => ({ id, icon, label, desc }))
     return (
       <>
+        <ExtensionNoticeQueue />
         <MobileShell
           entries={mobileEntries}
           extensions={extensionPages}
@@ -626,6 +660,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
 
   return (
     <div data-ui="shell" className="flex h-full">
+      <ExtensionNoticeQueue />
       {/* Activity Bar — hidden when maximized. The w-12 box only holds the
           place; the bar itself is an absolute layer that widens into the
           hover drawer over the sidebar / main area, so nothing reflows. Rows
@@ -675,7 +710,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           sidebar={
             <ExplorerSidebar projectId={projectId} pathInput={pathInput} onPathInputChange={setPathInput} onOpenFolder={handleOpenFolder} onOpenPath={openFolderPath} activeProject={activeProject} />
           }
-          main={<ExplorerMainArea projectId={projectId} showBottom={!bottomFloating && !maximized} bottomSlotRef={setDockedBottomSlot} />}
+          main={<CanvasVisible.Provider value={isExplorer}><ExplorerMainArea projectId={projectId} showBottom={!bottomFloating && !maximized} bottomSlotRef={setDockedBottomSlot} /></CanvasVisible.Provider>}
         />
       </div>
 

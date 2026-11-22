@@ -255,9 +255,9 @@ class WsClient {
   send(message: WsClientMessage): void {
     // Chat messages ride the ack/resend path — they are the one thing that
     // must survive a zombie socket (root cause: idle-reconnect message loss).
-    const { type, clientMsgId } = message
-    if (type === 'chat' && clientMsgId) {
-      this.sendChat(clientMsgId, message)
+    const { type } = message
+    if (message.type === 'chat' && message.clientMsgId) {
+      this.sendChat(message.clientMsgId, message)
       return
     }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -270,7 +270,8 @@ class WsClient {
     // reconnect dump them all to the server in a single burst (which both
     // floods the server and ties up the client's main thread serializing the
     // queue, manifesting to the user as "the terminal locked up").
-    if (type === '__ping__' || type === 'terminal:input' || type === 'terminal:resize') return
+    // Decisions are never replayed after reconnect; a fresh snapshot must invite a new click.
+    if (type === 'extension:notice:respond' || type === '__ping__' || type === 'terminal:input' || type === 'terminal:resize') return
     // Cap the queue. Anything beyond this is structural (subscribe, command:*)
     // — drop the oldest so a fresh request still gets through after a long
     // outage, instead of growing the array without bound.

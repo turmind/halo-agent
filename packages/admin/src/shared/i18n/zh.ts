@@ -1,4 +1,14 @@
 export const zh: Record<string, string> = {
+  'extensions.canvas.open': '在画布中打开',
+  'extensions.canvas.unavailable': '此画布扩展暂不可用，请在「设置 → 扩展」中检查。',
+  'extensions.notices.title': '扩展通知',
+  'extensions.notices.open': '打开',
+  'extensions.notices.dismiss': '隐藏（不作答）',
+  'extensions.notices.session': '会话',
+  'extensions.notices.expires': '于 {time} 到期',
+  'extensions.notices.pending': '正在等待服务器…',
+  'extensions.notices.reconnecting': '重新连接到此工作区后才能作答。',
+  'extensions.notices.denied': '服务器未接受此答复，请检查工作区或重新打开视图。',
   // ── Channels sidebar ──
   'channels.wechat': '微信',
   'channels.observerAdminOnly': 'Observer（仅管理员可设）',

@@ -4,6 +4,11 @@ import { createContext, createElement, useContext, useEffect, useRef, type React
 import { create } from 'zustand'
 import { loader } from '@monaco-editor/react'
 import type { FileTreeNode } from '@turmind/halo-core'
+import { canvasKey, isCanvasKey, type CanvasView } from '@/features/extensions/canvas-logic'
+
+export function canvasBuffer(view: CanvasView): EditorBuffer {
+  return { kind: 'extension', extensionView: view, path: canvasKey(view), content: '', originalContent: '', language: '' }
+}
 
 export type { FileTreeNode }
 
@@ -25,6 +30,7 @@ export function disposeMonacoModels(projectId: string | null | undefined, paths:
   const monaco = loader.__getMonacoInstance()
   if (!monaco) return
   for (const p of paths) {
+    if (isCanvasKey(p)) continue
     monaco.editor.getModel(monaco.Uri.parse(monacoModelPath(projectId, p)))?.dispose()
   }
 }
@@ -32,7 +38,11 @@ export function disposeMonacoModels(projectId: string | null | undefined, paths:
 /** A file's editable content (or preview metadata). One per path —
  *  shared by every pane that shows the same file, so editing in one pane
  *  reflects in the other. */
-export interface EditorBuffer {
+export type EditorBuffer = FileBuffer | (Omit<FileBuffer, 'kind' | 'extensionView'> & { kind: 'extension'; extensionView: CanvasView })
+
+interface FileBuffer {
+  kind?: 'file'
+  extensionView?: never
   path: string
   content: string
   originalContent: string
@@ -75,7 +85,9 @@ function deriveActiveView(state: { buffers: Record<string, EditorBuffer>; groups
     const buf = state.buffers[path]
     if (buf) tabs.push(buf)
   }
-  return { tabs, activeTab: grp.activeTab }
+  // Legacy consumers (chat context / file tree) see only a real file path.
+  // Canvas selection is the pane's activeTab, not a pretend current file.
+  return { tabs, activeTab: grp.activeTab && state.buffers[grp.activeTab]?.kind === 'extension' ? null : grp.activeTab }
 }
 
 /** Open `path` in group `idx`: seed its buffer via `makeBuffer` when none
@@ -112,6 +124,8 @@ interface EditorStore {
    *  monacoModelPath). Synced by EditorPanel; buffer-drop points read it to
    *  dispose the matching model. */
   modelPathPrefix: string | null
+  /** A phone/desktop layout remount must reuse live buffers, including unsaved edits. */
+  restoredProjectId: string | null
   setModelPathPrefix(prefix: string | null): void
 
   // ── Legacy convenience fields (derived from active group) ─────────
@@ -149,6 +163,8 @@ interface EditorStore {
   contextEnabled: boolean
   setSelectedText(text: string | null, range?: { startLine: number; endLine: number } | null): void
   setContextEnabled(enabled: boolean): void
+
+  openExtension(view: CanvasView): void
 
   // ── File ops (default to active group) ────────────────────────────
   openFile(path: string, content: string, language: string, mtime?: number, meta?: { size?: number; createdAt?: number; readOnly?: boolean }): void
@@ -249,6 +265,7 @@ export function createEditorStore() {
       tabs: [],
       activeTab: null,
       modelPathPrefix: null,
+      restoredProjectId: null,
 
       setModelPathPrefix(prefix) {
         if (get().modelPathPrefix !== prefix) set({ modelPathPrefix: prefix })
@@ -345,6 +362,17 @@ export function createEditorStore() {
             () => ({ path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge, ...(meta?.bundle ? { bundle: true } : {}) }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt, ...(meta?.readOnly ? { readOnly: true } : {}) }))
           const next = { ...state, buffers, groups }
           return { buffers, groups, ...deriveActiveView(next) }
+        })
+      },
+
+      openExtension(view) {
+        const path = canvasKey(view)
+        set((state) => {
+          const home = state.groups.findIndex((g) => g.tabs.includes(path))
+          const activeGroupIdx = home < 0 ? state.activeGroupIdx : home
+          const { buffers, groups } = showInGroup(state, activeGroupIdx, path, () => canvasBuffer(view))
+          const next = { ...state, buffers, groups, activeGroupIdx }
+          return { buffers, groups, activeGroupIdx, selectedText: null, selectedRange: null, ...deriveActiveView(next) }
         })
       },
 
@@ -447,7 +475,7 @@ export function createEditorStore() {
       updateContent(path, content) {
         set((state) => {
           const buf = state.buffers[path]
-          if (!buf) return state
+          if (!buf || buf.kind === 'extension') return state
           const modified = content !== buf.originalContent
           const buffers = { ...state.buffers, [path]: { ...buf, content, modified } }
           const modifiedPaths = new Set(state.modifiedPaths)
@@ -594,7 +622,7 @@ export function createEditorStore() {
       markModified(path) {
         set((state) => {
           const buf = state.buffers[path]
-          if (!buf) return state
+          if (!buf || buf.kind === 'extension') return state
           const modifiedPaths = new Set(state.modifiedPaths)
           modifiedPaths.add(path)
           const buffers = { ...state.buffers, [path]: { ...buf, modified: true } }

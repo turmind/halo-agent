@@ -9,6 +9,8 @@ import { useI18n } from '@/shared/i18n'
 import { cn, confirmAction } from '@/shared/utils'
 import { getExtensionsSnapshot, platformLabels, runsHere, subscribe } from '@/features/editor/previews/registry'
 import { newerStatus } from './update-status'
+import { openExtensionCanvas } from '@/features/extensions/canvas-logic'
+import { useProjectStore } from '@/shared/stores/project-store'
 
 /**
  * Settings → Extensions: the installed canvas preview extensions
@@ -39,6 +41,11 @@ import { newerStatus } from './update-status'
 export function ExtensionsView() {
   const { t } = useI18n()
   const snapshot = useSyncExternalStore(subscribe, getExtensionsSnapshot, getExtensionsSnapshot)
+  const projectId = useProjectStore((s) => s.activeProject?.id)
+  const openCanvas = (info: ExtensionInfo) => {
+    const projectId = useProjectStore.getState().activeProject?.id
+    if (projectId && info.canvas && runsHere(info)) openExtensionCanvas({ kind: 'extension', extensionId: info.id, viewId: 'default', projectId })
+  }
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -66,9 +73,11 @@ export function ExtensionsView() {
   })
 
   /** After an upload / update: ask when it landed an unconfirmed backend. */
-  async function offerConfirm(info: ExtensionInfo) {
-    if (!info.backend || info.backend.confirmed) return
-    if (await confirmAction(confirmPrompt(info))) await api.extensions.confirmBackend(info.id)
+  async function offerConfirm(info: ExtensionInfo): Promise<boolean> {
+    if (!info.backend || info.backend.confirmed) return true
+    if (!(await confirmAction(confirmPrompt(info)))) return false
+    await api.extensions.confirmBackend(info.id)
+    return true
   }
 
   async function handleConfirmBackend(ext: ExtensionInfo) {
@@ -77,6 +86,7 @@ export function ExtensionsView() {
     setError(null)
     try {
       await api.extensions.confirmBackend(ext.id)
+      openCanvas(ext)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -100,7 +110,8 @@ export function ExtensionsView() {
     setBusy(true)
     setError(null)
     try {
-      await offerConfirm(await api.extensions.install(file))
+      const info = await api.extensions.install(file)
+      if (await offerConfirm(info)) openCanvas(info)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -205,9 +216,9 @@ export function ExtensionsView() {
       ) : (
         <ul className="divide-y divide-[var(--border)] rounded border border-[var(--border)]">
           {rows.map(({ ext, off, update }) => (
-            <li key={ext.id} className="flex items-center gap-3 px-3 py-2">
-              <div className={cn('min-w-0 flex-1', off && 'opacity-50')}>
-                <div className="flex items-baseline gap-2">
+            <li key={ext.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
+              <div className={cn('min-w-0 flex-1 basis-40', off && 'opacity-50')}>
+                <div className="flex flex-wrap items-baseline gap-2">
                   <span className="truncate text-xs font-medium text-[var(--foreground)]">{ext.name}</span>
                   <code className="text-[10px] text-[var(--muted-foreground)]">{ext.id}@{ext.version}</code>
                   {off && (
@@ -270,6 +281,11 @@ export function ExtensionsView() {
                 )}
                 {update && <UpdateLine entry={update} />}
               </div>
+              {ext.canvas && !off && runsHere(ext) && (
+                <button type="button" disabled={busy || !projectId} onClick={() => openCanvas(ext)} className="shrink-0 rounded px-2 py-1 text-[10px] text-[var(--primary)] hover:bg-[var(--secondary)] disabled:opacity-50">
+                  {t('extensions.canvas.open')}
+                </button>
+              )}
               {ext.backend && !ext.backend.confirmed && (
                 <button
                   onClick={() => handleConfirmBackend(ext)}

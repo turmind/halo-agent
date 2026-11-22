@@ -44,6 +44,7 @@ export interface ActivityStep {
  *  activity effects plus `insert` / `busy`, which only a chat-bar panel emits
  *  (extension-chatbar-logic.ts). */
 export type PageEffect = ActivityEffect | { type: 'insert'; text: string } | { type: 'busy'; busy: boolean }
+  | { type: 'focus-chat' } | { type: 'immersive'; on: boolean }
 
 export interface PageStep {
   state: ActivityState
