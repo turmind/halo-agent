@@ -73,7 +73,7 @@ describe('MessageList path links', () => {
 describe('Explorer opener', () => {
   const ROOT = '/ws/proj'
 
-  async function setup(disk: Record<string, { dir?: boolean; size?: number; content?: string }>) {
+  async function setup(disk: Record<string, { dir?: boolean; size?: number; content?: string }>, mode: 'tree-only' | 'editor-only' = 'tree-only') {
     vi.resetModules()
     const { api } = await import('../src/shared/api-client')
     vi.spyOn(api.extensions, 'list').mockResolvedValue({ extensions: [], disabled: [], errors: [] })
@@ -94,7 +94,7 @@ describe('Explorer opener', () => {
     const { openPath } = await import('../src/shared/path-link')
     const { isPathExpanded } = await import('../src/features/explorer/file-tree')
     useProjectStore.getState().openFolder(ROOT)
-    mount(createElement(EditorPanel, { projectId: ROOT, mode: 'tree-only' }))
+    mount(createElement(EditorPanel, { projectId: ROOT, mode }))
     await settle()
     return { store: useEditorStore, openPath, readText, isPathExpanded, api, EditorPanel }
   }
@@ -159,7 +159,7 @@ describe('Explorer opener', () => {
       [`${ROOT}/docs/a.md`]: { content: 'ws' },
       '/etc/hosts.txt': { content: '127.0.0.1' },
       '/var/a.zip': { size: 9 },
-    })
+    }, 'editor-only')
     await act(async () => { await vi.waitFor(() => expect(store.getState().buffers['/etc/hosts.txt']).toBeTruthy()) })
     const b = store.getState().buffers
     expect(Object.keys(b).sort()).toEqual(['/etc/hosts.txt', '/var/a.zip', 'docs/a.md'])

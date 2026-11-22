@@ -90,6 +90,31 @@ describe('typed file-less tabs', () => {
 })
 
 describe('Canvas host and editor', () => {
+  it('resolve migrates symlink state before the canonical editor restores it', async () => {
+    const source = '/workspace-link'
+    const oldView = { ...view, projectId: source }
+    localStorage.setItem('halo_tabs:' + source, JSON.stringify({ groups: [{ tabs: [
+      { path: 'a.ts' }, { kind: 'extension', path: canvasKey(oldView), extensionView: oldView },
+    ], activeTab: canvasKey(oldView) }], activeGroupIdx: 0 }))
+    localStorage.setItem('halo_chat_tabs_' + source, JSON.stringify({ active: 'child' }))
+    useProjectStore.setState({ activeProject: null })
+    vi.spyOn(api.fs, 'home').mockResolvedValue({ home: source })
+    vi.spyOn(api.fs, 'resolveWorkspace').mockResolvedValue({ path: view.projectId, id: 'workspace' })
+    vi.spyOn(api.files, 'tree').mockResolvedValue({ projectId: view.projectId, root: 'workspace', path: '', tree: [] })
+    const read = vi.spyOn(api.files, 'read').mockResolvedValue({ path: 'a.ts', content: 'a', size: 1, modifiedAt: 1, createdAt: 1 })
+    const opened = vi.fn((s) => {
+      if (s.activeProject) expect(localStorage.getItem('halo_chat_tabs_' + s.activeProject.id)).toBe(JSON.stringify({ active: 'child' }))
+    })
+    const unsubscribe = useProjectStore.subscribe(opened)
+    await act(async () => root.render(createElement(WorkspaceLayout, { linkState: 'fresh' })))
+    unsubscribe()
+    expect(opened).toHaveBeenCalled()
+    expect(useEditorStore.getState().buffers[canvasKey(view)].extensionView).toEqual(view)
+    expect(useEditorStore.getState().groups[0].activeTab).toBe(canvasKey(view))
+    expect(host.querySelector('[data-extension-canvas] iframe')).not.toBeNull()
+    expect(read).toHaveBeenCalledWith('a.ts', view.projectId)
+    expect(localStorage.getItem('halo_tabs:' + source)).toBeNull()
+  })
   it.each(['chat', 'terminal'] as const)('Open Canvas uncovers a maximized %s bottom panel', async (bottomTab) => {
     vi.spyOn(api.fs, 'home').mockResolvedValue({ home: view.projectId })
     vi.spyOn(api.fs, 'resolveWorkspace').mockResolvedValue({ path: view.projectId, id: 'workspace' })

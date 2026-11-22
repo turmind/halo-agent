@@ -27,6 +27,7 @@ import { listedSessionTitle } from '@/features/chat/session-list'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { addRecentWorkspace } from '@/features/explorer/use-recent-workspaces'
+import { migrateWorkspaceUiState } from './workspace-storage'
 import { useGitDecorationsSync, useIsRepo } from '@/features/explorer/git-decorations'
 import { api } from '@/shared/api-client'
 import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
@@ -205,6 +206,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     const resolveAndOpen = async (target: string, writeUrl: boolean) => {
       try {
         const ws = await api.fs.resolveWorkspace(target)
+        migrateWorkspaceUiState(target, ws.path)
         openFolder(ws.path, ws.id)
         setPathInput(ws.path)
         loadFileTree(ws.path)
