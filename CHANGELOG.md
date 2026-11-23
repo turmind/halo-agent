@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-23
+
 - Extensions: a manifest `canvas` block adds a file-less Canvas tab, and an extension backend can raise notices in Admin (open the Canvas, confirm / cancel); full-access sessions whose agent enables a confirmed extension's skill get `HALO_EXT_BACKENDS` / `HALO_EXT_NODE` in `shell_exec`, so the agent can drive that backend. Ships with the new halo-hub `browser` 1.0.0 (co-browsing on the server; needs 2.4.0).
 - Extensions: the backend proxy's same-origin check reads `Sec-Fetch-Site`, so it works behind a reverse proxy that rewrites Host (CloudFront); extension WebSockets rely on the SameSite cookie like Admin `/ws`.
 - Workspaces: a workspace opened through a symlink resolves to its real path; Admin moves that workspace's saved UI state to the real path.
@@ -1339,7 +1341,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.3.6...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/turmind/halo-agent/compare/v2.3.6...v2.4.0
 [2.3.6]: https://github.com/turmind/halo-agent/compare/v2.3.5...v2.3.6
 [2.3.5]: https://github.com/turmind/halo-agent/compare/v2.3.4...v2.3.5
 [2.3.4]: https://github.com/turmind/halo-agent/compare/v2.3.3...v2.3.4
