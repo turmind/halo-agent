@@ -48,6 +48,8 @@ jobs:
         run: cd packages/node-go && go vet ./... && go test ./...
       - run: shellcheck packages/node-go/install.sh
       # rmguard vectors must still equal what the current TS assertRmSafe says (needs server's tsx).
+      # child-env.ts imports @turmind/halo-core/protocol, which resolves to core's dist/ — build it first.
+      - run: pnpm --filter @turmind/halo-core build
       - run: node packages/node-go/testgen/gen-rmguard-vectors.mjs --check
       - name: regex differential fuzz (20k patterns, seed = run id)
         run: |
