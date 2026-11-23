@@ -69,12 +69,12 @@ export function ExtensionCanvasPanel({ view }: { view: CanvasView }) {
   }, [immersive])
   if (!visible) return null
   return <div ref={hostRef} data-extension-canvas={view.extensionId} data-immersive={immersive || undefined} className={cn('flex h-full flex-col bg-[var(--background)]', immersive && 'fixed inset-0 z-[70] h-dvh')}>
-    <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-2 text-xs">
+    {immersive && <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] px-3 py-2 text-xs">
       {info ? <ExtensionMaskIcon info={info} icon={info.canvas?.icon} fallback={Puzzle} className="h-4 w-4" /> : <Puzzle className="h-4 w-4" />}
       <span className="min-w-0 flex-1 truncate">{canvasTitle(info, lang, view)}</span>
       {view.sessionId && <button type="button" onClick={() => focusCanvasChat(view)} className="flex shrink-0 items-center gap-1 rounded px-2 py-1 hover:bg-[var(--secondary)]"><MessageSquare className="h-4 w-4" />{t('editor.immersive.backToChat')}</button>}
-      {immersive && <button type="button" aria-label={t('editor.immersive.exit')} onClick={() => exitImmersive()} className="rounded p-1 hover:bg-[var(--secondary)]"><X className="h-4 w-4" /></button>}
-    </div>
+      <button type="button" aria-label={t('editor.immersive.exit')} onClick={() => exitImmersive()} className="rounded p-1 hover:bg-[var(--secondary)]"><X className="h-4 w-4" /></button>
+    </div>}
     <div className="min-h-0 flex-1">
       {!info ? <p role="status" className="p-4 text-sm text-[var(--muted-foreground)]">{t('extensions.canvas.unavailable')}</p>
         : backendPending(info) ? <BackendPendingNotice info={info} />

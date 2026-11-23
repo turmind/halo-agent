@@ -98,6 +98,29 @@ describe('notice lifecycle', () => {
 })
 
 describe('visible notice queue', () => {
+  it.each([false, true])('Open dismisses a non-confirmation notice without collapsing others (other notice: %s)', async (withOtherNotice) => {
+    const n = record(); delete n.notice.confirmation
+    const other = record('other')
+    const notices = withOtherNotice ? [n, other] : [n]
+    useExtensionNotices.setState({ ...seeded(n), notices }, true)
+    const send = vi.spyOn(wsClient, 'send').mockImplementation(() => {})
+    const open = vi.fn(); window.addEventListener('halo:extension-canvas', open)
+    await act(async () => root.render(createElement(ExtensionNoticeQueue)))
+    act(() => click('extensions.notices.open'))
+    expect((open.mock.calls[0][0] as CustomEvent).detail.sessionId).toBe('exact-child')
+    expect(useExtensionNotices.getState().dismissed).toEqual([noticeKey(n)])
+    expect(send).not.toHaveBeenCalled()
+    act(() => useExtensionNotices.setState((s) => reduceNotice(s, { ...snapshot(n), notices })))
+    expect(host.querySelectorAll('section')).toHaveLength(withOtherNotice ? 1 : 0)
+    if (withOtherNotice) {
+      expect(host.querySelector('[aria-expanded]')?.getAttribute('aria-expanded')).toBe('true')
+      expect(host.textContent).toContain('Confirm')
+    } else expect(host.querySelector('aside')).toBeNull()
+    act(() => useExtensionNotices.setState((s) => reduceNotice({ ...s, syncedProject: null }, { ...snapshot(n), notices })))
+    expect(useExtensionNotices.getState().dismissed).toEqual([])
+    expect(host.querySelectorAll('section')).toHaveLength(notices.length)
+    window.removeEventListener('halo:extension-canvas', open)
+  })
   it('renders literal text; Open and dismiss never answer or send chat', async () => {
     const n = record(); useExtensionNotices.setState(seeded(n), true)
     const send = vi.spyOn(wsClient, 'send').mockImplementation(() => {})

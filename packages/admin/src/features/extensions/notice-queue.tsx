@@ -27,7 +27,7 @@ export function ExtensionNoticeQueue() {
   }, [state.notices])
   const notices = state.notices.filter((n) => !state.dismissed.includes(noticeKey(n)))
   // A new request or reconnect snapshot deserves attention even after Open
-  // collapsed an earlier notice to uncover the live Canvas.
+  // collapsed an earlier confirmation notice to uncover the live Canvas.
   const [lastAttention, setLastAttention] = useState(state.attentionVersion)
   if (lastAttention !== state.attentionVersion) { setLastAttention(state.attentionVersion); setCollapsed(false) }
   if (!notices.length) return null
@@ -57,7 +57,11 @@ export function ExtensionNoticeQueue() {
             <p className="whitespace-pre-wrap break-words text-xs">{n.notice.message}</p>
             <p className="text-[10px] text-[var(--muted-foreground)]">{t('extensions.notices.expires', { time: new Date(n.expiresAt).toLocaleTimeString() })}</p>
             <div className="flex flex-wrap gap-2 text-xs">
-              {view && <button type="button" onClick={() => { openExtensionCanvas(view); setCollapsed(true) }} className="rounded border border-[var(--border)] px-3 py-2 hover:bg-[var(--secondary)]">{t('extensions.notices.open')}</button>}
+              {view && <button type="button" onClick={() => {
+                openExtensionCanvas(view)
+                if (n.notice.confirmation) setCollapsed(true)
+                else useExtensionNotices.setState((s) => ({ dismissed: [...s.dismissed, key] }))
+              }} className="rounded border border-[var(--border)] px-3 py-2 hover:bg-[var(--secondary)]">{t('extensions.notices.open')}</button>}
               {n.notice.confirmation && <>
                 <button type="button" disabled={disabled} onClick={() => answer(n, 'confirm')} className="rounded bg-[var(--primary)] px-3 py-2 text-[var(--primary-foreground)] disabled:opacity-50">{n.notice.confirmation.confirmLabel}</button>
                 <button type="button" disabled={disabled} onClick={() => answer(n, 'cancel')} className="rounded border border-[var(--border)] px-3 py-2 disabled:opacity-50">{n.notice.confirmation.cancelLabel}</button>
