@@ -36,7 +36,7 @@ One full-screen view at a time, with a top bar (title, back, actions) and a bott
 
 ## Not on the phone
 
-Desktop interactions that need a mouse or a wide screen are not offered: drag and drop, split view (canvas panes, Chat + Terminal side by side), and the floating chat window. With one view on screen there is also no activity bar, hover drawer or resizable sidebar.
+Desktop interactions that need a mouse or a wide screen are not offered: drag and drop, Chat + Terminal side by side, and the floating chat window. Canvas split panes stay available. With one view on screen there is also no activity bar, hover drawer or resizable sidebar.
 
 ## Fitting the width
 
