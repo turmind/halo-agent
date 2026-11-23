@@ -30,15 +30,18 @@ function authenticate(id: string, headers: Headers, url: URL, method: string, ws
     return { authorization }
   }
   if (!isAuthenticated(getTokenFromCookieHeader(headers.get('cookie') ?? undefined))) throw new ExtensionAccessError(401)
-  // Non-browser clients have no Origin. Browsers cannot omit it on WS or
-  // cross-origin writes. Do not trust a caller-supplied forwarding host.
+  // HTTP writes with Origin use browser-controlled fetch metadata, falling
+  // back to scheme/Host only when absent; forwarding hosts are not trusted.
   const origin = headers.get('origin')
-  if (origin && (ws || !['GET', 'HEAD', 'OPTIONS'].includes(method))) {
-    // Proxies such as CloudFront rewrite Host. Sec-Fetch-Site is the browser's
-    // authoritative same-origin signal, unavailable for page scripts to forge.
+  if (ws || (origin && !['GET', 'HEAD', 'OPTIONS'].includes(method))) {
     const fetchSite = headers.get('sec-fetch-site')
-    let same = fetchSite === 'same-origin'
-    if (fetchSite === null) {
+    // Browsers omit Fetch Metadata on WS handshakes, and Host-rewriting proxies
+    // make Origin/Host comparison meaningless. Like Admin /ws (and 2.3.6), WS
+    // relies on the SameSite=Lax httpOnly cookie; explicit contrary metadata
+    // still denies the request. HTTP keeps its Origin/Host fallback.
+    let same = ws
+    if (fetchSite !== null) same = fetchSite === 'same-origin'
+    else if (!ws && origin) {
       try {
         const protocol = config.server.trustProxy
           ? headers.get('x-forwarded-proto')?.split(',')[0].trim() || url.protocol.slice(0, -1)

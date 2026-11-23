@@ -152,20 +152,40 @@ describe('extension proxy session auth', () => {
     expect(await res.json()).toEqual({ error: 'Cross-origin request denied' })
     expect(await wsStatus(headers)).toBe(403)
   })
-  it('keeps Origin/Host matching for POST and WS without Sec-Fetch-Site', async () => {
+  it('keeps Origin/Host matching for POST but not WS without Sec-Fetch-Site', async () => {
     const same = { cookie, host: new URL(base).host, origin: base }
     expect((await app.request(`${base}/api/ext/browser/view`, { method: 'POST', headers: same })).status).toBe(200)
     const { ws } = await wsResult(same)
     ws.terminate()
     const rewritten = { cookie, host: 'origin.example:8527', origin: 'https://halo.example' }
     expect((await app.request(`${base}/api/ext/browser/view`, { method: 'POST', headers: rewritten })).status).toBe(403)
-    expect(await wsStatus(rewritten)).toBe(403)
+    const upgraded = await wsResult(rewritten)
+    expect(upgraded.payload.url).toBe('/stream')
+    upgraded.ws.terminate()
   })
-  it('only checks fetch metadata for requests with Origin that are writes or WS', async () => {
+  it('upgrades a Canvas WS with rewritten Host and public Origin without Fetch Metadata', async () => {
+    const headers = { cookie, host: 'origin.example:8527', origin: 'https://halo.example' }
+    const context = `?_halo_context=${encode({ projectId: dir, sessionId: 's1' })}`
+    const { ws, payload } = await wsResult(headers, context)
+    expect(payload.url).toBe('/stream')
+    expect(decode(payload.headers['x-halo-caller'])).toMatchObject({ kind: 'admin', projectId: dir, sessionId: 's1' })
+    ws.terminate()
+    expect(await wsStatus({ host: headers.host, origin: headers.origin }, context)).toBe(401)
+    expect(await wsStatus(headers, '?_halo_context=malformed')).toBe(403)
+  })
+  it('upgrades legacy voice-input-style WS without view context behind a Host-rewriting proxy', async () => {
+    const { ws, payload } = await wsResult({ cookie, host: 'origin.example:8527', origin: 'https://halo.example' })
+    expect(payload.url).toBe('/stream')
+    expect(payload.headers['x-halo-caller']).toBeUndefined()
+    expect(payload.headers.cookie).toBeUndefined()
+    ws.terminate()
+  })
+  it('keeps HTTP check scope but rejects explicit contrary WS metadata even without Origin', async () => {
     const headers = { cookie, 'sec-fetch-site': 'cross-site' }
     expect((await app.request(`${base}/api/ext/browser/view`, { method: 'POST', headers })).status).toBe(200)
     expect((await app.request(`${base}/api/ext/browser/view`, { headers: { ...headers, origin: 'https://other.example' } })).status).toBe(200)
-    const { ws } = await wsResult(headers)
+    expect(await wsStatus(headers)).toBe(403)
+    const { ws } = await wsResult({ cookie })
     ws.terminate()
   })
   it('revalidates a grant after acquire waited', async () => {
@@ -237,8 +257,8 @@ describe('extension proxy session auth', () => {
     broker.revokeSession(dir, 's1', 'session-stopped')
     await stopped
   })
-  it('WS cookie view context is non-secret routing; cross-origin/invalid bearer never passes', async () => {
-    expect(await wsStatus({ cookie, origin: 'https://other.example' })).toBe(403)
+  it('WS cookie view context is non-secret routing; contrary metadata/invalid bearer never passes', async () => {
+    expect(await wsStatus({ cookie, origin: 'https://other.example', 'sec-fetch-site': 'cross-site' })).toBe(403)
     expect(await wsStatus({ cookie, authorization: 'Bearer wrong' })).toBe(401)
     expect(await wsStatus({}, '?token=wrong')).toBe(401)
     const { ws, payload } = await wsResult({ cookie, origin: base }, `?_halo_context=${encode({ projectId: dir, sessionId: 's1' })}&viewId=v`)
