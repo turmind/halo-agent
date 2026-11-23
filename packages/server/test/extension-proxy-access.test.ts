@@ -136,6 +136,38 @@ describe('extension proxy session auth', () => {
     expect((await app.request('/api/ext/browser/echo', { method: 'POST', headers: { cookie, origin: 'https://other.example' } })).status).toBe(403)
     expect((await app.request(`${base}/api/ext/browser/echo`, { method: 'POST', headers: { cookie, origin: base.replace('http:', 'https:') } })).status).toBe(403)
   })
+  it('accepts browser same-origin POST and WS behind a Host-rewriting proxy', async () => {
+    const headers = { cookie, host: 'origin.example:8527', origin: 'https://halo.example', 'sec-fetch-site': 'same-origin' }
+    const res = await app.request(`${base}/api/ext/browser/view`, { method: 'POST', headers })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ url: '/view' })
+    const { ws, payload } = await wsResult(headers)
+    expect(payload.url).toBe('/stream')
+    ws.terminate()
+  })
+  it.each(['cross-site', 'same-site', 'none', ''])('rejects POST and WS with Sec-Fetch-Site %j even when Origin matches Host', async (fetchSite) => {
+    const headers = { cookie, host: new URL(base).host, origin: base, 'sec-fetch-site': fetchSite }
+    const res = await app.request(`${base}/api/ext/browser/view`, { method: 'POST', headers })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'Cross-origin request denied' })
+    expect(await wsStatus(headers)).toBe(403)
+  })
+  it('keeps Origin/Host matching for POST and WS without Sec-Fetch-Site', async () => {
+    const same = { cookie, host: new URL(base).host, origin: base }
+    expect((await app.request(`${base}/api/ext/browser/view`, { method: 'POST', headers: same })).status).toBe(200)
+    const { ws } = await wsResult(same)
+    ws.terminate()
+    const rewritten = { cookie, host: 'origin.example:8527', origin: 'https://halo.example' }
+    expect((await app.request(`${base}/api/ext/browser/view`, { method: 'POST', headers: rewritten })).status).toBe(403)
+    expect(await wsStatus(rewritten)).toBe(403)
+  })
+  it('only checks fetch metadata for requests with Origin that are writes or WS', async () => {
+    const headers = { cookie, 'sec-fetch-site': 'cross-site' }
+    expect((await app.request(`${base}/api/ext/browser/view`, { method: 'POST', headers })).status).toBe(200)
+    expect((await app.request(`${base}/api/ext/browser/view`, { headers: { ...headers, origin: 'https://other.example' } })).status).toBe(200)
+    const { ws } = await wsResult(headers)
+    ws.terminate()
+  })
   it('revalidates a grant after acquire waited', async () => {
     const auth = await authorization()
     const original = acquire.getMockImplementation()!

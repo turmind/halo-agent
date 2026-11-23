@@ -34,13 +34,18 @@ function authenticate(id: string, headers: Headers, url: URL, method: string, ws
   // cross-origin writes. Do not trust a caller-supplied forwarding host.
   const origin = headers.get('origin')
   if (origin && (ws || !['GET', 'HEAD', 'OPTIONS'].includes(method))) {
-    let same = false
-    try {
-      const protocol = config.server.trustProxy
-        ? headers.get('x-forwarded-proto')?.split(',')[0].trim() || url.protocol.slice(0, -1)
-        : url.protocol.slice(0, -1)
-      same = new URL(origin).origin === `${protocol}://${headers.get('host') ?? url.host}`
-    } catch { /* malformed/opaque origin */ }
+    // Proxies such as CloudFront rewrite Host. Sec-Fetch-Site is the browser's
+    // authoritative same-origin signal, unavailable for page scripts to forge.
+    const fetchSite = headers.get('sec-fetch-site')
+    let same = fetchSite === 'same-origin'
+    if (fetchSite === null) {
+      try {
+        const protocol = config.server.trustProxy
+          ? headers.get('x-forwarded-proto')?.split(',')[0].trim() || url.protocol.slice(0, -1)
+          : url.protocol.slice(0, -1)
+        same = new URL(origin).origin === `${protocol}://${headers.get('host') ?? url.host}`
+      } catch { /* malformed/opaque origin */ }
+    }
     if (!same) throw new ExtensionAccessError(403, 'Cross-origin request denied')
   }
   const encoded = headers.get(EXTENSION_VIEW_CONTEXT_HEADER) ?? url.searchParams.get(EXTENSION_VIEW_CONTEXT_QUERY)
