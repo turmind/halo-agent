@@ -196,9 +196,9 @@ describe('shell_exec env + hint', () => {
   const POLL = 'then poll the log file or process status with follow-up shell_exec calls'
   const expectNotifyRecipe = (description: string) => {
     expect(description).toContain('halo notify')
-    expect(description).toContain("don't wait in a sleep loop")
+    expect(description).toContain('instead of polling')
     expect(description).toContain('>/dev/null 2>&1 &')
-    expect(description).not.toContain('poll')
+    expect(description).not.toContain(POLL)
   }
   const expectPollRecipe = (description: string) => {
     expect(description).toContain(POLL)
@@ -227,7 +227,7 @@ describe('shell_exec env + hint', () => {
       // Not held open by the background job's pipes.
       expect(Date.now() - started).toBeLessThan(1500)
       await until(() => fs.existsSync(out), 6000)
-      expect(fs.readFileSync(out, 'utf-8')).toBe('s1|notify|job done: exit=0')
+      expect(fs.readFileSync(out, 'utf-8')).toBe('s1|notify|job done: 0')
     } finally {
       process.env.PATH = realPath
     }
