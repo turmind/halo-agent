@@ -91,6 +91,13 @@ A2A v1.0 (JSON-RPC only). **Inbound**: a workspace with `.halo/agent-card.json` 
 - Key state: `~/.halo/global/runs.db` (`running_sessions`)
 - Code: `packages/server/src/agents/run-ledger.ts` + `db/runs-db.ts` · Doc: [design/session.md](docs/design/session.md#run-ledger--restart-nudge-for-interrupted-roots-haloglobalrunsdb)
 
+## Local notify (`halo notify`)
+
+`halo notify [--workspace] [--session] "<text>"` lets a script on this machine wake a session of the running server as a `[Script notice] …` message (new turn when idle, merged when busy, a stopped sub-session woken and reporting up); no reply awaited, no pre-compact evo. Full-access sessions' `shell_exec` carries `HALO_WORKSPACE` / `HALO_SESSION_ID`, so a background job the agent starts can report back without flags. Auth: loopback only + a per-boot token file. Server only.
+
+- Key state: `~/.halo/secrets/notify.json` (`{url, token}`, rewritten each boot)
+- Code: `packages/server/src/routes/notify.ts` + `local-notify.ts` + `SessionManager.deliverMessage` + `packages/cli/src/notify.ts` · Docs: [dev/api.md](docs/dev/api.md#local-notify-halo-notify), [guide/cli.md](docs/guide/cli.md#wake-a-session-from-a-script-halo-notify)
+
 ## Observability (OpenTelemetry)
 
 `general.observability.endpoint` turns on OTLP export of traces / metrics / logs to any collector; spans follow GenAI semconv (`invoke_agent` / `chat` / `execute_tool`). No vendor code in the server; nothing persisted.

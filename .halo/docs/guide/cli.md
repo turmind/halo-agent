@@ -250,6 +250,21 @@ Output: one `failed  <agent>/<session>: <reason>` line on stderr per failure, th
 
 Downgrading to 1.x after converting: converted sessions show up empty there (their old files are gone), as do sessions created on 2.0.
 
+## Wake a session from a script (`halo notify`)
+
+```bash
+halo notify "build finished: exit 0"                                   # inside a session's shell_exec
+halo notify --workspace ~/proj --session <id> "nightly sync done"      # from anywhere else on this machine
+```
+
+Puts `[Script notice] <text>` into a session of the server running on this machine: a new turn when the session is idle, merged into the running turn when it's busy; a stopped sub-session is woken and reports to its parent when done. The typical use is a background job the agent starts itself — `(make test > .halo/tmp/test.log 2>&1; halo notify "tests done: $?") &` — so the session hears about it without polling. Inside a full-access session's `shell_exec` the target comes from `$HALO_WORKSPACE` / `$HALO_SESSION_ID`, so no flags are needed; `-w` / `-s` override them. A sub-session id is the full `<root>><sub>` path.
+
+- Text up to 8192 bytes (UTF-8); longer is refused, not cut. Fire-and-forget: one attempt, nothing queued or retried — exit `0` when the server took it, `1` with one line why otherwise (server not running, authentication failed, session not found / archived, parent session gone, …).
+- Needs the server running **as the same OS user**: it writes `{url, token}` to `~/.halo/secrets/notify.json` (0600) at every boot, and only accepts loopback callers. A CLI / TUI session (`halo cli` / `halo tui`, no server) gets no `$HALO_SESSION_ID`; neither does a workspace / readonly session.
+- The agent sees the notice as data, not instructions — it decides what to do with it.
+- **Known limit**: a script started with `nohup … &` from a session is still a child of the server's service, so `halo server restart` (systemd stops the whole unit) kills it before it can notify. For anything long-lived, run it from `crontab` / its own systemd unit and pass `--workspace --session` explicitly.
+- Dev and prod servers on one machine have different HOMEs, hence different token files: a session's shell notifies the server that runs it.
+
 ## Server Mode (background daemon)
 
 `halo server start|stop|restart|status|logs` manages a local server from the

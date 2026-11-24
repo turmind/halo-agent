@@ -276,6 +276,19 @@ File: `packages/server/src/routes/cron.ts`. Admin cookie auth. REST CRUD over `c
 | GET | `/api/cron/channel-targets` | List channel accounts available as targets, aggregated from the cron-dispatcher registry. Returns `{targets}` |
 | GET | `/api/cron/meta` | Server-side metadata. Returns `{hostTimezone}` — the IANA tz this server resolves an unset `cron_jobs.timezone` to |
 
+## Local notify (`halo notify`)
+
+File: `packages/server/src/routes/notify.ts` (+ `local-notify.ts` for the token). Not mounted in AgentCore mode; the CLI / TUI loop never serves it.
+
+`POST /api/notify` — a script on this machine wakes a session. Outside the admin cookie (`PUBLIC_PATHS`). Auth, both required:
+
+- **Loopback peer** (127.0.0.0/8, `::1`, IPv4-mapped loopback), and no `X-Forwarded-For` / `Forwarded` header — a local reverse proxy would otherwise make every caller look local → else **403**.
+- **`Authorization: Bearer <token>`** matching the per-boot token. The server mints a random 32-byte token at boot and, once listening, writes `{url, token}` to `~/.halo/secrets/notify.json` (0600, temp file + rename; `url` = the actual loopback listener, IPv6 as `http://[::1]:<port>`). A new token every boot, nothing to revoke; a stale file meets a closed port or a 401 → else **401**.
+
+Body `{workspace, session, text}` (≤ 64 KB request). `text` ≤ 8192 UTF-8 bytes, refused (not cut) → **413**. Missing / blank field or non-JSON → **400**. Server shutting down → **503**. `workspace` must already be a Halo workspace (`.halo/halo.db`; nothing scaffolded) → else **404**; `session` must exist, be unarchived, and — for a sub-session — have an unarchived parent (its turn end reports there) → else **404** `{error}` naming which. No workspace binding: any session of any workspace on this server.
+
+Delivery goes through `SessionManager.deliverMessage` with `[Script notice] <text>` as both the UI row and the model text (the model sees the usual `[<stamp>]` arrival prefix too): idle → a new turn, running / compacting → queued with a soft interrupt (joins the running turn), a stopped sub-session → woken, reporting to its parent at turn end. No `reply_to`, nothing awaited, no pre-compact evo for that turn. **200** `{ok: true, state: 'running' | 'queued'}`; a delivery error → **500**. Nothing is stored or retried server-side.
+
 ## Source Control (Git)
 
 File: `packages/server/src/routes/git.ts`. Admin cookie auth. Backs the Source Control panel + Explorer git decorations. All project-scoped reads take `projectId=<absPath>`; writes take it in the JSON body. A write (stage/unstage/commit/push/pull/init/remote) broadcasts `file:changed` (path `.git`) so the panel, graph and explorer decorations auto-refresh without polling — the file watcher ignores `.git`, so the route re-broadcasts it itself. The broadcast is **workspace-scoped** (`broadcastToWorkspace`): only clients bound to that workspace get it, so a git write in A no longer makes every tab showing B refetch status + ignored + log. Path params on diff are traversal-checked against the project root.
