@@ -10,7 +10,7 @@ import { promisify } from 'node:util'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import type { ExtensionBackendIsolation } from '@turmind/halo-core/protocol'
+import { NOTIFY_SHELL_ENV, type ExtensionBackendIsolation } from '@turmind/halo-core/protocol'
 import { cleanChildEnv, outboundProxyEnv } from '../child-env.js'
 
 const execAsync = promisify(exec)
@@ -781,7 +781,9 @@ export function isHiddenWorkspacePath(resolved: string, wsRoot: string): boolean
 /** `cd <workspaceRoot> && <command>` — workspaceRoot is data ($1), command is
  *  an intentional shell snippet (the shell_exec contract). */
 export function buildExecScriptArgs(workspaceRoot: string, command: string): string[] {
-  return ['bash', '-c', `cd "$1" && shift && ${command}`, 'bash', workspaceRoot]
+  // Keep a trailing `&` inside the command, not on the whole cd/shift AND
+  // list: its async subshell would otherwise hold stdout/stderr pipes open.
+  return ['bash', '-c', `cd "$1" && shift && {\n${command}\n}`, 'bash', workspaceRoot]
 }
 
 /** Write `content` to `filePath`. Path is data ($1); content is single-quote
@@ -986,7 +988,8 @@ export function noSandboxMessage(reason: SandboxUnavailableReason | null = getSa
 export async function sandboxExec(command: string, opts: SandboxOptions & { proxyEnv?: Record<string, string>; env?: Record<string, string>; secrets?: string[] }): Promise<SandboxResult> {
   // Windows normalizes workspace/readonly to full. That must not turn a
   // non-full caller's optional context into an extension credential grant.
-  const shellEnv = opts.accessLevel === 'full' ? opts.env : undefined
+  const shellEnv = opts.accessLevel === 'full' ? opts.env
+    : Object.fromEntries(Object.entries(opts.env ?? {}).filter(([key]) => NOTIFY_SHELL_ENV.some((allowed) => allowed === key)))
   opts = normalizeOptsForPlatform(opts)
   const proxyEnv = opts.proxyEnv ?? outboundProxyEnv()
   // cmd syntax differs and Windows has no rm; the guard is POSIX-only.
@@ -1032,18 +1035,16 @@ export async function sandboxExec(command: string, opts: SandboxOptions & { prox
       maxBuffer: opts.maxBuffer,
       signal: opts.signal,
       argv: [SANDBOX_EXEC, '-p', buildSeatbeltProfile(opts), ...buildExecScriptArgs(opts.workspaceRoot, command)],
-      env: seatbeltEnv(proxyEnv),
+      env: { ...seatbeltEnv(proxyEnv), ...shellEnv },
     })
   }
 
   const bwrapOk = await isBwrapAvailable()
   if (!bwrapOk) throw new Error(noSandboxMessage())
 
-  // Only the user's command gets the proxy vars (the file helpers below
-  // never touch the network). After buildBwrapArgs' --clearenv, or bwrap
-  // would wipe them; network isn't unshared, so a proxy on the host's
-  // 127.0.0.1 stays reachable from inside.
-  const prefix = [...buildBwrapArgs(opts), ...Object.entries(proxyEnv).flatMap(([k, v]) => ['--setenv', k, v])]
+  // Only the user's command gets proxy + scoped notify vars, after
+  // --clearenv. Network isn't unshared: host loopback stays reachable.
+  const prefix = [...buildBwrapArgs(opts), ...Object.entries({ ...proxyEnv, ...shellEnv }).flatMap(([k, v]) => ['--setenv', k, v])]
   return bwrapExec(prefix, buildExecScriptArgs(opts.workspaceRoot, command), {
     timeout: opts.timeout,
     maxBuffer: opts.maxBuffer,

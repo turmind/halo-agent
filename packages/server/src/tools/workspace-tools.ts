@@ -336,7 +336,7 @@ export interface WorkspaceToolsOptions {
    * up yet (e.g. the agent-form preview).
    */
   supportsVision?: boolean
-  /** Resolved only for an actual full-access shell invocation, never schemas. */
+  /** Resolved only for an actual shell invocation; sandboxExec allowlists non-full env. */
   shellContext?: () => Promise<{ env: Record<string, string>; secrets: string[] }>
   /** shellContext sets `$HALO_SESSION_ID` / `$HALO_WORKSPACE` (`halo notify`): say so in shell_exec's description. */
   notifyHint?: boolean
@@ -715,7 +715,7 @@ export function createWorkspaceTools(
     const mask = (s: string) => maskSecrets(maskProxyCredential(s, proxy), secrets)
 
     try {
-      const context = accessLevel === 'full' ? await opts.shellContext?.() : undefined
+      const context = await opts.shellContext?.()
       secrets.push(...(context?.secrets ?? []))
       const { stdout, stderr } = await sandboxExec(cmd, {
         ...sbOpts,
@@ -778,7 +778,10 @@ export function createWorkspaceTools(
         `Commands are killed after ${config.timeout.shellExec / 1000}s; run anything longer in the background. If you`,
         'need to know when it finishes, end the job with `halo notify` (it wakes this',
         'session) instead of polling:',
-        `  nohup sh -c '<command> > .halo/tmp/<name>.log 2>&1; halo notify "<name> done: $?"' >/dev/null 2>&1 &`,
+        ...(accessLevel === 'readonly' ? [
+          'The workspace is read-only; only the exit code comes back.',
+          `  nohup sh -c '<command> >/dev/null 2>&1; halo notify "<name> done: $?"' >/dev/null 2>&1 &`,
+        ] : [`  nohup sh -c '<command> > .halo/tmp/<name>.log 2>&1; halo notify "<name> done: $?"' >/dev/null 2>&1 &`]),
       ] : [
         `Commands are killed after ${config.timeout.shellExec / 1000}s. For anything that may run`,
         'longer (big builds, long test suites, deploys), start it in the background',

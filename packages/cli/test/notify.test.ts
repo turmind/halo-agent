@@ -25,6 +25,8 @@ function runHalo(args: string[], env: Record<string, string> = {}): Promise<{ co
     const base = { ...process.env, HOME: home, USERPROFILE: home }
     delete base.HALO_WORKSPACE
     delete base.HALO_SESSION_ID
+    delete base.HALO_NOTIFY_TOKEN
+    delete base.HALO_NOTIFY_URL
     execFile(process.execPath, ['--import', 'tsx', 'src/index.ts', 'notify', ...args],
       { cwd: CLI_ROOT, timeout: 20_000, env: { ...base, ...env } },
       (err, _stdout, stderr) => resolve({ code: err ? Number((err as { code?: unknown }).code ?? 1) : 0, stderr }))
@@ -74,6 +76,20 @@ describe('halo notify', () => {
     expect(seen.map((s) => s.body)).toEqual([{ workspace: '/w', session: 's1', text: 'hi' }, { workspace: '/w', session: 's2', text: 'hi' }])
   })
 
+  it.each(['missing', 'malformed', 'different'])('env credentials win over a %s token file, including explicit target overrides', async (file) => {
+    if (file !== 'missing') writeToken('http://127.0.0.1:1', 'file-token')
+    if (file === 'malformed') fs.writeFileSync(tokenFile(), '{')
+    const env = { HALO_WORKSPACE: '/own', HALO_SESSION_ID: 'own', HALO_NOTIFY_URL: url, HALO_NOTIFY_TOKEN: 'session-token' }
+    expect(await runHalo(['-w', '/other', '-s', 'other', 'hi'], env)).toEqual({ code: 0, stderr: '' })
+    expect(seen).toEqual([{ auth: 'Bearer session-token', body: { workspace: '/other', session: 'other', text: 'hi', source: { workspace: '/own', session: 'own' } } }])
+  })
+
+  it.each(['HALO_NOTIFY_URL', 'HALO_NOTIFY_TOKEN'])('only %s is set: still reads the token file', async (key) => {
+    writeToken()
+    expect((await runHalo(['-w', '/w', '-s', 's1', 'hi'], { [key]: 'unused' })).code).toBe(0)
+    expect(seen[0].auth).toBe('Bearer tok')
+  })
+
   it.each([
     ['no text', ['-w', '/w', '-s', 's1'], {}, 'no text'],
     ['no workspace', ['hi'], { HALO_SESSION_ID: 's1' }, 'no workspace — pass --workspace or set $HALO_WORKSPACE'],
@@ -113,7 +129,7 @@ describe('halo notify', () => {
     expect(r.stderr).toContain('authentication failed')
   })
 
-  it.each([[404, 'session not found: s1'], [413, 'text is 9000 bytes; the limit is 8192'], [503, 'server is shutting down']])('%i: the server\'s reason, exit 1', async (status, error) => {
+  it.each([[403, 'this token can only wake its own session'], [404, 'session not found: s1'], [413, 'text is 9000 bytes; the limit is 8192'], [503, 'server is shutting down']])('%i: the server\'s reason, exit 1', async (status, error) => {
     writeToken()
     reply = { status, body: { error } }
     const r = await runHalo(['-w', '/w', '-s', 's1', 'hi'])

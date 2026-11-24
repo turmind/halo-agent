@@ -491,7 +491,7 @@ setEvoSessionRegistry(registry)
 // AgentCore A2A mode opens its workspace only once the lease is held, and
 // that SessionManager's constructor drains the rows itself.
 // `halo notify`'s per-boot token, minted before the sweep below can build a
-// session: full sessions' shell_exec env and hint key off it. Not in AgentCore.
+// session: shell_exec notify env and hint key off it. Not in AgentCore.
 if (!AGENTCORE) initLocalNotify()
 
 if (OWNS_RUNTIMES && !AGENTCORE) {

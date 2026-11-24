@@ -44,12 +44,13 @@ describe('lazy shell extension context and hygiene', () => {
     expect(output).toContain('***')
     expect(command).not.toContain(key)
   })
-  it('does not call the supplier for readonly/workspace shells', async () => {
+  it('non-full shells drop extension env even if a supplier provides it', async () => {
     const supplier = vi.fn(async () => context)
     for (const accessLevel of ['readonly', 'workspace'] as const) {
       const tool = createWorkspaceTools(process.cwd(), { accessLevel, shellContext: supplier }).find((t) => t.name === 'shell_exec')
-      await tool?.callback({ command: 'printf ok' })
+      const output = await tool?.callback({ command: 'env' })
+      expect(output ?? '').not.toContain(EXTENSION_BACKENDS_ENV)
+      expect(output ?? '').not.toContain(EXTENSION_NODE_ENV)
     }
-    expect(supplier).not.toHaveBeenCalled()
   })
 })

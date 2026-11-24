@@ -3,9 +3,10 @@
  *
  * Auth: loopback peers only (not proxied — a local reverse proxy makes every
  * caller look loopback), plus `Authorization: Bearer <token>` matching the
- * per-boot token in `~/.halo/secrets/notify.json` (local-notify.ts), which
- * only this OS user can read. Outside the admin cookie (PUBLIC_PATHS); no
- * workspace binding — any session of any Halo workspace on this machine.
+ * per-boot token in `~/.halo/secrets/notify.json` (any workspace/session), or
+ * a session HMAC (only its own target). Outside the admin cookie (PUBLIC_PATHS).
+ * The CLI's optional `source` identifies an HMAC for 403 vs 401; never trusted
+ * until authenticated (local-notify.ts).
  *
  * Body `{ workspace, session, text }`. The text goes in as `[Script notice]
  * <text>` through SessionManager.deliverMessage (no reply awaited, no
@@ -21,7 +22,7 @@ import { getConnInfo } from '@hono/node-server/conninfo'
 import { eq } from 'drizzle-orm'
 import { NOTIFY_LABEL, NOTIFY_MAX_TEXT_BYTES, NOTIFY_PATH, type NotifyRequest } from '@turmind/halo-core/protocol'
 import { agentSessions } from '../db/schema.js'
-import { localNotifyToken } from '../local-notify.js'
+import { localNotifyToken, localNotifySessionToken } from '../local-notify.js'
 import { isShuttingDown } from '../shutdown.js'
 import type { SessionManager } from '../agents/session-manager.js'
 
@@ -51,18 +52,35 @@ export function createNotifyRoutes(opts: { registry: NotifyRegistry }): Hono {
   app.post(NOTIFY_PATH.replace(/^\/api/, ''), bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'request too large' }, 413) }), async (c) => {
     const token = localNotifyToken()
     if (!token) return c.json({ error: 'notify is not available on this server' }, 404)
-    // The token file (0600) is the boundary; the proxy headers only stop the
+    // Boot/scoped credentials are the boundary; the proxy headers stop the
     // common case of a same-host reverse proxy relaying remote callers.
     if (!isLoopback(getConnInfo(c).remote.address) || PROXY_HEADERS.some((h) => c.req.header(h) !== undefined)) {
       return c.json({ error: 'notify accepts local callers only' }, 403)
     }
-    if (!tokenMatches(c.req.header('authorization'), token)) return c.json({ error: 'unauthorized' }, 401)
+    const authorization = c.req.header('authorization')
+    const full = tokenMatches(authorization, token)
+    if (!authorization?.startsWith('Bearer ')) return c.json({ error: 'unauthorized' }, 401)
 
-    let body: Partial<NotifyRequest>
+    let body: Partial<NotifyRequest> | null
     try { body = await c.req.json() } catch { return c.json({ error: 'body must be JSON { workspace, session, text }' }, 400) }
-    const { workspace, session, text } = body
+    const { workspace, session, text } = body ?? {}
     if (typeof workspace !== 'string' || !workspace || typeof session !== 'string' || !session || typeof text !== 'string' || !text.trim()) {
       return c.json({ error: 'workspace, session and text are required' }, 400)
+    }
+    if (!full) {
+      // HMACs carry no identity. The CLI supplies the original env target so
+      // a valid but out-of-scope credential can be distinguished from junk,
+      // without a token table or scanning every workspace/session.
+      const source = body?.source ?? { workspace, session }
+      if (typeof source.workspace !== 'string' || !source.workspace || typeof source.session !== 'string' || !source.session) {
+        return c.json({ error: 'unauthorized' }, 401)
+      }
+      let expected: string | null = null
+      try { expected = localNotifySessionToken(source.workspace, source.session) } catch { /* Unknown identity is not authenticated. */ }
+      if (!expected || !tokenMatches(authorization, expected)) return c.json({ error: 'unauthorized' }, 401)
+      let target: string | null = null
+      try { target = localNotifySessionToken(workspace, session) } catch { /* No such target is outside this credential's scope. */ }
+      if (!target || !tokenMatches(authorization, target)) return c.json({ error: 'this token can only wake its own session' }, 403)
     }
     const bytes = Buffer.byteLength(text)
     if (bytes > NOTIFY_MAX_TEXT_BYTES) return c.json({ error: `text is ${bytes} bytes; the limit is ${NOTIFY_MAX_TEXT_BYTES}` }, 413)

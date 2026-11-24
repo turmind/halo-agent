@@ -6,7 +6,9 @@
  * `~/.halo/secrets/notify.json` (0600); the CLI reads that file and calls
  * `POST /api/notify` on loopback. A new token every boot — nothing to revoke;
  * a stale file left by a dead server only meets a closed port or a 401.
- * Never the admin password; a non-loopback peer is refused by the route.
+ * Workspace/readonly shells receive an HMAC bound to their workspace and
+ * session instead of the boot token. Never the admin password; non-loopback
+ * peers are refused for both credentials.
  *
  * Server only: CLI / TUI / AgentCore never call initLocalNotify, so their
  * sessions get neither the shell env nor the shell_exec hint — a message
@@ -19,6 +21,17 @@ import { NOTIFY_TOKEN_FILE } from '@turmind/halo-core/protocol'
 import { HALO_SECRETS_DIR } from './config.js'
 
 let token: string | null = null
+let notifyUrl: string | null = null
+
+export function localNotifyUrl(): string | null {
+  return notifyUrl
+}
+
+/** Both issuance and target resolution use the workspace's real path. No token table. */
+export function localNotifySessionToken(workspacePath: string, sessionId: string): string | null {
+  if (!token) return null
+  return crypto.createHmac('sha256', token).update(`${fs.realpathSync(workspacePath)}\0${sessionId}`).digest('hex')
+}
 
 /** Boot (index.ts), before any session is built: the shell_exec env and
  *  hint key off it (session-agent-builder). */
@@ -39,9 +52,11 @@ export function writeNotifyTokenFile(url: string): void {
   const tmp = `${file}.${process.pid}.tmp`
   fs.writeFileSync(tmp, JSON.stringify({ url, token }) + '\n', { encoding: 'utf-8', mode: 0o600 })
   fs.renameSync(tmp, file)
+  notifyUrl = url
 }
 
 /** Test-only. */
-export function _setLocalNotifyToken(t: string | null): void {
+export function _setLocalNotifyToken(t: string | null, url: string | null = null): void {
   token = t
+  notifyUrl = url
 }

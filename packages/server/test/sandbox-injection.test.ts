@@ -76,6 +76,16 @@ describe('sandbox bash-c builders are injection-safe', () => {
     expect(fs.realpathSync(out)).toBe(fs.realpathSync(dir))
   })
 
+  it('exec: a trailing background command does not background cd/shift or hold the pipes', () => {
+    const start = Date.now()
+    execFileSync('bash', buildExecScriptArgs(dir, "nohup sh -c 'sleep 2' >/dev/null 2>&1 &").slice(1), { stdio: 'pipe' })
+    expect(Date.now() - start).toBeLessThan(1500)
+  })
+
+  it.each(['printf ok; # trailing comment', 'printf ok\n# trailing comment', '{ printf ok; }'])('exec: grouping preserves shell syntax: %s', (command) => {
+    expect(execFileSync('bash', buildExecScriptArgs(dir, command).slice(1), { stdio: 'pipe' }).toString()).toBe('ok')
+  })
+
   it('readdir: a $(...) dir path is NOT executed', () => {
     const maliciousDir = path.join(dir, 'ls-$(touch PWNED)')
     // ls of a nonexistent literal dir errors — that's fine; what matters is the

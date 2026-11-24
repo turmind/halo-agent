@@ -2,8 +2,8 @@
  * `halo notify [--workspace <path>] [--session <id>] "<text>"` — wake a server
  * session from a script on this machine. Reads `{ url, token }` from
  * `~/.halo/secrets/notify.json` (the running server writes it at boot) and
- * calls `POST /api/notify` (server routes/notify.ts). Inside a full-access
- * session's shell_exec the target defaults to `$HALO_WORKSPACE` /
+ * calls `POST /api/notify` (server routes/notify.ts); non-full sessions use
+ * env credentials instead. In server shell_exec the target defaults to `$HALO_WORKSPACE` /
  * `$HALO_SESSION_ID`. One attempt: nothing is stored or retried; exit 0 when
  * the server took it, else non-zero with one line why.
  */
@@ -12,7 +12,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { parseArgs } from 'node:util'
 import {
-  NOTIFY_MAX_TEXT_BYTES, NOTIFY_PATH, NOTIFY_SESSION_ENV, NOTIFY_TOKEN_FILE, NOTIFY_WORKSPACE_ENV, type NotifyRequest,
+  NOTIFY_MAX_TEXT_BYTES, NOTIFY_PATH, NOTIFY_SESSION_ENV, NOTIFY_TOKEN_FILE, NOTIFY_WORKSPACE_ENV, NOTIFY_TOKEN_ENV, NOTIFY_URL_ENV, type NotifyRequest,
 } from '@turmind/halo-core/protocol'
 
 export const HELP_NOTIFY = `Usage: halo notify [--workspace <path>] [--session <id>] "<text>"
@@ -28,10 +28,11 @@ background ("tell me when the build finishes").
                           (default: $${NOTIFY_SESSION_ENV})
   -h, --help              Show this help
 
-Inside a full-access session's shell_exec both variables are set, so
+Inside a server session's shell_exec both variables are set, so
 \`halo notify "build done"\` needs no flags. Text: up to ${NOTIFY_MAX_TEXT_BYTES} bytes (UTF-8).
-Needs the server running as this OS user (it writes
-~/.halo/secrets/${NOTIFY_TOKEN_FILE} at boot); local calls only.
+Workspace/readonly sessions can only wake themselves, using $${NOTIFY_TOKEN_ENV}
+and $${NOTIFY_URL_ENV}. Otherwise reads ~/.halo/secrets/${NOTIFY_TOKEN_FILE}
+(the server running as this OS user writes it at boot); local calls only.
 
 Exit codes: 0 = delivered, 1 = not delivered (the reason on stderr).
 `
@@ -57,16 +58,28 @@ export async function cmdNotify(argv: string[]): Promise<number> {
   if (bytes > NOTIFY_MAX_TEXT_BYTES) return fail(`text is ${bytes} bytes; the limit is ${NOTIFY_MAX_TEXT_BYTES}`)
 
   const tokenFile = path.join(homedir(), '.halo', 'secrets', NOTIFY_TOKEN_FILE)
+  const envToken = process.env[NOTIFY_TOKEN_ENV]
+  const envUrl = process.env[NOTIFY_URL_ENV]
+  const fromEnv = !!(envToken && envUrl)
   let server: { url: string; token: string }
-  try {
-    server = JSON.parse(fs.readFileSync(tokenFile, 'utf-8'))
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return fail(`no Halo server found (${tokenFile} missing) — start it with \`halo server start\``)
-    return fail(`cannot read ${tokenFile}: ${err instanceof Error ? err.message : String(err)}`)
+  if (envToken && envUrl) {
+    server = { url: envUrl, token: envToken }
+  } else {
+    try {
+      server = JSON.parse(fs.readFileSync(tokenFile, 'utf-8'))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return fail(`no Halo server found (${tokenFile} missing) — start it with \`halo server start\``)
+      return fail(`cannot read ${tokenFile}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (typeof server?.url !== 'string' || typeof server.token !== 'string') return fail(`${tokenFile} is malformed — restart the server to rewrite it`)
   }
-  if (typeof server?.url !== 'string' || typeof server.token !== 'string') return fail(`${tokenFile} is malformed — restart the server to rewrite it`)
 
   const body: NotifyRequest = { workspace: path.resolve(workspace), session, text }
+  // A bare HMAC has no identity: carry its original target so the server can
+  // authenticate it before returning 403 for explicit -w/-s overrides.
+  if (fromEnv && process.env[NOTIFY_WORKSPACE_ENV] && process.env[NOTIFY_SESSION_ENV]) {
+    body.source = { workspace: path.resolve(process.env[NOTIFY_WORKSPACE_ENV]!), session: process.env[NOTIFY_SESSION_ENV]! }
+  }
   let res: Response
   try {
     res = await fetch(`${server.url}${NOTIFY_PATH}`, {
@@ -82,6 +95,6 @@ export async function cmdNotify(argv: string[]): Promise<number> {
   }
   if (res.ok) return 0
   const reason = await (res.json() as Promise<{ error?: unknown } | null>).then((j) => typeof j?.error === 'string' ? j.error : '', () => '')
-  if (res.status === 401) return fail(`authentication failed — ${tokenFile} does not match the server at ${server.url} (restarted meanwhile? try again)`)
+  if (res.status === 401) return fail(`authentication failed — ${fromEnv ? '$HALO_NOTIFY_TOKEN' : tokenFile} does not match the server at ${server.url} (restarted meanwhile? try again)`)
   return fail(reason || `server answered ${res.status}`)
 }

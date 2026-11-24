@@ -18,8 +18,8 @@ import { buildA2ATools } from '../a2a/outbound.js'
 import { buildNodeTools } from '../nodes/tools.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
 import { extensionSessionAccess } from '../extensions/session-access.js'
-import { localNotifyToken } from '../local-notify.js'
-import { NOTIFY_SESSION_ENV, NOTIFY_WORKSPACE_ENV } from '@turmind/halo-core/protocol'
+import { localNotifyToken, localNotifySessionToken, localNotifyUrl } from '../local-notify.js'
+import { NOTIFY_SESSION_ENV, NOTIFY_WORKSPACE_ENV, NOTIFY_TOKEN_ENV, NOTIFY_URL_ENV } from '@turmind/halo-core/protocol'
 
 /** The A2A channel's session-id stem (`a2a_<accountId>_…`, routes.ts). */
 const A2A_SESSION_STEM = sessionPrefix('a2a', '').slice(0, -1)
@@ -199,17 +199,25 @@ export class SessionAgentBuilder {
 
     const imageOverride = (yamlConfig?.model as Record<string, unknown> | undefined)?.image as boolean | undefined
     // No token outside a full server boot (CLI/TUI loop, AgentCore): no env, no hint.
-    const notifyEnv = (accessLevel ?? 'full') === 'full' && localNotifyToken() !== null
+    const full = accessLevel === null
+    const notifyEnv = localNotifyToken() !== null
+    const scopedToken = notifyEnv && !full ? localNotifySessionToken(this.host.workspaceRoot, sessionId) : null
     const allTools = createWorkspaceTools(this.host.workspaceRoot, {
       accessLevel: accessLevel ?? 'full',
       allowedNamespaces,
       supportsVision: modelSupportsImage(modelId, imageOverride),
       shellContext: async () => {
-        const context = await extensionSessionAccess.shellContext(this.host.workspaceRoot, sessionId)
-        // `halo notify` with no flags targets this session (the full
-        // `root>sub` id for a sub-session). Full access only, like the
-        // extension env: shellContext is never resolved for other levels.
-        return notifyEnv ? { ...context, env: { ...context.env, [NOTIFY_WORKSPACE_ENV]: this.host.workspaceRoot, [NOTIFY_SESSION_ENV]: sessionId } } : context
+        const context = full ? await extensionSessionAccess.shellContext(this.host.workspaceRoot, sessionId) : { env: {}, secrets: [] }
+        if (!notifyEnv) return context
+        // Non-full shells cannot read notify.json: give only this session's
+        // HMAC, never the boot token or extension credentials.
+        // A boot-recovered session may be built before the listener is ready.
+        const url = localNotifyUrl()
+        return {
+          env: { ...context.env, [NOTIFY_WORKSPACE_ENV]: this.host.workspaceRoot, [NOTIFY_SESSION_ENV]: sessionId,
+            ...(scopedToken && url ? { [NOTIFY_TOKEN_ENV]: scopedToken, [NOTIFY_URL_ENV]: url } : {}) },
+          secrets: [...context.secrets, ...(scopedToken ? [scopedToken] : [])],
+        }
       },
       // Not on Windows: the desktop bundle's `halo` isn't on PATH and shell_exec
       // runs cmd, so the nohup recipe can't run there (env still set). The

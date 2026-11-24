@@ -1,15 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { serve } from '@hono/node-server'
+import { extensionSessionAccess } from '../src/extensions/session-access.js'
+import { cleanChildEnv } from '../src/child-env.js'
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { NOTIFY_MAX_TEXT_BYTES } from '@turmind/halo-core/protocol'
 import { createNotifyRoutes } from '../src/routes/notify.js'
-import { _setLocalNotifyToken } from '../src/local-notify.js'
+import { _setLocalNotifyToken, localNotifySessionToken } from '../src/local-notify.js'
 import { createEvoDb, setEvoDb, evolutionRuns, type EvoDb } from '../src/db/evo-db.js'
 import { agentSessions } from '../src/db/schema.js'
-import { getSandboxBackend, initBwrapCheck } from '../src/tools/sandbox.js'
+import { getSandboxBackend, initBwrapCheck, sandboxExec, buildSeatbeltProfile } from '../src/tools/sandbox.js'
 import { createWorkspaceTools } from '../src/tools/workspace-tools.js'
 import { config } from '../src/config.js'
 import type { ToolDef } from '../src/agents/runtime/types.js'
@@ -19,7 +22,7 @@ import { installCronHarness, teardownCronHarness, until, type CronHarness } from
  * `POST /api/notify` (`halo notify`): loopback + per-boot token auth, delivery
  * through SessionManager.deliverMessage (idle → new turn, busy → merged, a
  * stopped sub-session woken and reporting to its parent), no pre-compact evo;
- * and the shell_exec env / hint full sessions get while the token exists.
+ * and all three levels' shell_exec env / hint while the token exists.
  * Real SessionManager + the cron harness's stub agent.
  */
 
@@ -33,7 +36,11 @@ let app: Hono
 const realHome = process.env.HOME
 
 beforeEach(() => {
-  tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'halo-notify-')))
+  // A readonly workspace under /tmp is hidden by bwrap's private tmpfs.
+  // Keep the fixture outside it, without changing the sandbox's mounts.
+  const tmp = path.resolve(import.meta.dirname, '../../../.halo/tmp')
+  fs.mkdirSync(tmp, { recursive: true })
+  tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(tmp, 'halo-notify-')))
   process.env.HOME = tmpHome
   ws = path.join(tmpHome, 'ws')
   evoDb = createEvoDb(path.join(tmpHome, 'global'))
@@ -41,7 +48,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(ws, '.halo'), { recursive: true })
   fs.writeFileSync(path.join(ws, '.halo', 'settings.yaml'), 'general:\n  evolution:\n    level: L3\n')
   h = installCronHarness(ws)
-  _setLocalNotifyToken(TOKEN)
+  _setLocalNotifyToken(TOKEN, 'http://127.0.0.1:1')
   app = new Hono().route('/api', createNotifyRoutes({ registry: { getOrCreate: () => h.sm } }))
 })
 
@@ -78,6 +85,47 @@ describe('auth', () => {
   it.each([['missing', null], ['wrong', 'nope'], ['wrong length', TOKEN + 'x']])('%s bearer token: 401, nothing delivered', async (_n, token) => {
     expect((await notify({ workspace: ws, session: 's1', text: 'hi' }, { token })).status).toBe(401)
     expect(h.inputs).toEqual([])
+  })
+
+  it('session tokens are the specified hex HMAC, normalized by realpath', async () => {
+    const alias = path.join(tmpHome, 'alias')
+    fs.symlinkSync(ws, alias)
+    const token = localNotifySessionToken(alias, 's1')!
+    expect(token).toBe(crypto.createHmac('sha256', TOKEN).update(`${ws}\0s1`).digest('hex'))
+    expect((await notify({ workspace: alias, session: 's1', text: 'self' }, { token })).status).toBe(200)
+    await until(() => h.inputs.length === 1 && !sessions().has('s1'))
+    expect(h.inputs[0]).toContain('[Script notice] self')
+  })
+
+  it.each(['session', 'workspace'])('a verified session token cannot change its %s; boot token can', async (changed) => {
+    h.seedSession('s2')
+    const otherWs = path.join(tmpHome, 'other')
+    fs.mkdirSync(path.join(otherWs, '.halo'), { recursive: true })
+    fs.writeFileSync(path.join(otherWs, '.halo', 'halo.db'), '')
+    const source = { workspace: ws, session: 's1' }
+    const body = { workspace: changed === 'workspace' ? otherWs : ws, session: changed === 'workspace' ? 's1' : 's2', text: 'hi', source }
+    const res = await notify(body, { token: localNotifySessionToken(ws, 's1')! })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'this token can only wake its own session' })
+    expect(h.inputs).toEqual([])
+    expect((await notify(body)).status).toBe(200)
+  })
+
+  it('wrong hex, changed source, or a stale token: 401 (no token identity is guessed)', async () => {
+    const source = { workspace: ws, session: 's1' }
+    const token = localNotifySessionToken(ws, 's1')!
+    expect((await notify({ ...source, text: 'hi', source }, { token: '0'.repeat(64) })).status).toBe(401)
+    expect((await notify({ ...source, text: 'hi', source: { ...source, session: 's2' } }, { token })).status).toBe(401)
+    _setLocalNotifyToken('next-boot')
+    expect((await notify({ ...source, text: 'hi' }, { token })).status).toBe(401)
+    expect(h.inputs).toEqual([])
+  })
+
+  it('session tokens also require loopback and no proxy headers', async () => {
+    const token = localNotifySessionToken(ws, 's1')!
+    const body = { workspace: ws, session: 's1', text: 'hi' }
+    expect((await notify(body, { token, remote: '10.0.0.1' })).status).toBe(403)
+    expect((await notify(body, { token, headers: { forwarded: 'for=127.0.0.1' } })).status).toBe(403)
   })
 
   it.each(['10.0.0.5', '::ffff:192.168.1.2', '2001:db8::1'])('non-loopback peer %s: 403 even with the token', async (remote) => {
@@ -233,15 +281,79 @@ describe('shell_exec env + hint', () => {
     }
   })
 
-  it.skipIf(!bwrap)('a workspace-level session: neither, the poll recipe', async () => {
-    const shell = shellOf('s1', 'workspace')
-    expectPollRecipe(shell.description)
-    expect(await shell.callback({ command: PRINT })).toBe('unset|unset')
+  it.skipIf(!bwrap).each(['workspace', 'readonly'] as const)('%s: only the four notify variables, no extension grant, token masked', async (accessLevel) => {
+    const issue = vi.spyOn(extensionSessionAccess, 'shellContext')
+    const shell = shellOf('p1>c1', accessLevel)
+    expectNotifyRecipe(shell.description)
+    expect(await shell.callback({ command: PRINT })).toBe(`p1>c1|${ws}`)
+    const output = await shell.callback({ command: 'env' })
+    expect(output).toContain('HALO_NOTIFY_URL=http://127.0.0.1:1')
+    expect(output).toContain('HALO_NOTIFY_TOKEN=***')
+    expect(output).not.toContain(localNotifySessionToken(ws, 'p1>c1'))
+    expect(issue).not.toHaveBeenCalled()
+    const token = localNotifySessionToken(ws, 'p1>c1')!
+    const env = { HALO_WORKSPACE: ws, HALO_SESSION_ID: 'p1>c1', HALO_NOTIFY_URL: 'http://127.0.0.1:1', HALO_NOTIFY_TOKEN: token, HALO_EXT_BACKENDS: 'no', HALO_EXT_NODE: 'no', EXTRA: 'no' }
+    const raw = await sandboxExec('env', { workspaceRoot: ws, accessLevel, env })
+    for (const key of ['HALO_WORKSPACE', 'HALO_SESSION_ID', 'HALO_NOTIFY_URL', 'HALO_NOTIFY_TOKEN'] as const) expect(raw.stdout).toContain(`${key}=${env[key]}`)
+    expect(raw.stdout).not.toMatch(/HALO_EXT_|EXTRA=/)
   })
 
-  it('no token (CLI / TUI / AgentCore): neither, the poll recipe', async () => {
+  it.each(['full', 'workspace', 'readonly'] as const)('%s: exact notify paragraph', (accessLevel) => {
+    const paragraph = createWorkspaceTools(ws, { accessLevel, notifyHint: true }).find((t) => t.name === 'shell_exec')!.description.split('\n\n').at(-1)
+    expect(paragraph).toBe([
+      `Commands are killed after ${config.timeout.shellExec / 1000}s; run anything longer in the background. If you`,
+      'need to know when it finishes, end the job with `halo notify` (it wakes this',
+      'session) instead of polling:',
+      ...(accessLevel === 'readonly' ? [
+        'The workspace is read-only; only the exit code comes back.',
+        `  nohup sh -c '<command> >/dev/null 2>&1; halo notify "<name> done: $?"' >/dev/null 2>&1 &`,
+      ] : [`  nohup sh -c '<command> > .halo/tmp/<name>.log 2>&1; halo notify "<name> done: $?"' >/dev/null 2>&1 &`]),
+    ].join('\n'))
+  })
+
+  it.skipIf(!bwrap).each(['workspace', 'readonly'] as const)('%s: real CLI + bwrap recipe wakes itself over HTTP, other session refused', async (accessLevel) => {
+    const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 })
+    await new Promise<void>((r) => server.once('listening', r))
+    _setLocalNotifyToken(TOKEN, `http://127.0.0.1:${(server.address() as { port: number }).port}`)
+    h.seedSession('s1', { accessLevel }); h.seedSession('s2')
+    const bin = path.join(ws, 'bin')
+    fs.mkdirSync(bin)
+    fs.mkdirSync(path.join(ws, '.halo', 'tmp'), { recursive: true })
+    const cli = path.resolve(import.meta.dirname, '../../cli')
+    fs.writeFileSync(path.join(bin, 'halo'), `#!/bin/sh\nexec '${process.execPath}' --import '${cli}/node_modules/tsx/dist/loader.mjs' '${cli}/src/index.ts' "$@"\n`, { mode: 0o755 })
+    try {
+      const shell = shellOf('s1', accessLevel)
+      const recipe = shell.description.split('\n').find((l) => l.trimStart().startsWith('nohup '))!.trim()
+      const started = Date.now()
+      expect(await shell.callback({ command: `PATH="${bin}:$PATH" ` + recipe.replace('<command>', 'sleep 2').replaceAll('<name>', 'job') })).toBe('(no output)')
+      expect(Date.now() - started).toBeLessThan(1500)
+      await until(() => h.inputs.length === 1 && !sessions().has('s1'), 15_000)
+      expect(h.inputs[0]).toContain('[Script notice] job done: 0')
+      expect(fs.existsSync(path.join(ws, '.halo', 'tmp', 'job.log'))).toBe(accessLevel === 'workspace')
+      expect(await shell.callback({ command: `"${bin}/halo" notify -s s2 wrong` })).toContain('this token can only wake its own session')
+      expect(h.inputs).toHaveLength(1)
+    } finally {
+      await new Promise<void>((r, reject) => server.close((err) => err ? reject(err) : r()))
+    }
+  }, 25_000)
+
+  it('inherited notify credentials are stripped, including from full shells', async () => {
+    vi.stubEnv('HALO_NOTIFY_TOKEN', 'inherited-token'); vi.stubEnv('HALO_NOTIFY_URL', 'http://inherited')
+    expect(cleanChildEnv()).not.toHaveProperty('HALO_NOTIFY_TOKEN')
+    expect(cleanChildEnv()).not.toHaveProperty('HALO_NOTIFY_URL')
+    expect(await shellOf('s1', null).callback({ command: 'printf "%s|%s" "${HALO_NOTIFY_TOKEN-unset}" "${HALO_NOTIFY_URL-unset}"' })).toBe('unset|unset')
+    vi.unstubAllEnvs()
+  })
+
+  it.each(['workspace', 'readonly'] as const)('Seatbelt %s permits loopback and executing halo without changing its profile', (accessLevel) => {
+    const profile = buildSeatbeltProfile({ workspaceRoot: ws, accessLevel })
+    expect(profile).toContain('(allow default)')
+    expect(profile).not.toMatch(/deny (network|process)/)
+  })
+
+  it.each([null, ...bwrap ? ['workspace', 'readonly'] as const : []])('no token (CLI / TUI / AgentCore), %s: neither, the poll recipe', async (accessLevel) => {
     _setLocalNotifyToken(null)
-    const shell = shellOf('s1', null)
+    const shell = shellOf('s1', accessLevel)
     expectPollRecipe(shell.description)
     expect(await shell.callback({ command: PRINT })).toBe('unset|unset')
   })
@@ -257,7 +369,15 @@ describe('shell_exec env + hint', () => {
     expectPollRecipe(createWorkspaceTools(ws).find((t) => t.name === 'shell_exec')!.description)
   })
 
-  it.runIf(process.platform === 'win32')('Windows: env set, but no notify recipe (the nohup line cannot run under cmd)', () => {
-    expectPollRecipe(shellOf('s1', null).description)
+  it('Windows: every level keeps polling (the nohup line cannot run under cmd)', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    for (const level of [null, 'workspace', 'readonly'] as const) expectPollRecipe(shellOf('s1', level).description)
+  })
+
+  it.skipIf(!bwrap)('a boot-recovered non-full session resolves the listener URL at invocation', async () => {
+    _setLocalNotifyToken(TOKEN)
+    const shell = shellOf('s1', 'workspace')
+    _setLocalNotifyToken(TOKEN, 'http://127.0.0.1:43210')
+    expect(await shell.callback({ command: 'printf "%s" "$HALO_NOTIFY_URL"' })).toBe('http://127.0.0.1:43210')
   })
 })

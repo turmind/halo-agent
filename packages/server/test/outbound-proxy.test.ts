@@ -359,7 +359,7 @@ describe('through the proxy, for real', () => {
       expect(leaks(e)).not.toMatch(/s3cr3t|--setenv|--ro-bind|--clearenv/)
       expect(e.message).toMatch(/^Command failed: /)
     }
-    expect(execErr.message).toBe(`Command failed: bash -c cd "$1" && shift && echo boom >&2; exit 3 bash ${ws}\nboom\n`)
+    expect(execErr.message).toBe(`Command failed: bash -c cd "$1" && shift && {\necho boom >&2; exit 3\n} bash ${ws}\nboom\n`)
     expect(readErr.message).toContain('missing.txt')
     // The tool result says the same, masked on top.
     const shell = await tool('workspace', 'shell_exec')({ command: 'exit 3' })

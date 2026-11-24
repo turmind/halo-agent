@@ -65,7 +65,7 @@ export type {
   ExtensionNoticeRespondFrame, ExtensionNoticeServerFrame,
 } from './extension-notices.js'
 export {
-  NOTIFY_TOKEN_FILE, NOTIFY_PATH, NOTIFY_WORKSPACE_ENV, NOTIFY_SESSION_ENV, NOTIFY_MAX_TEXT_BYTES, NOTIFY_LABEL,
+  NOTIFY_TOKEN_FILE, NOTIFY_PATH, NOTIFY_WORKSPACE_ENV, NOTIFY_SESSION_ENV, NOTIFY_URL_ENV, NOTIFY_TOKEN_ENV, NOTIFY_SHELL_ENV, NOTIFY_MAX_TEXT_BYTES, NOTIFY_LABEL,
 } from './notify.js'
 export type { NotifyRequest } from './notify.js'
 export type { UpdateScope, CoreUpdateState, CoreUpdateStatus, ExtensionUpdateState, ExtensionUpdateEntry, ExtensionsUpdateStatus } from './update-types.js'
