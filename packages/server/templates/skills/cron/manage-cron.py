@@ -521,6 +521,9 @@ def cmd_update(args):
     elif run_at_ms is not None or set_webhook: sets.append(('schedule', ''))
     if args.run_at is not None: sets.append(('run_at', run_at_ms))
     elif has_schedule or set_webhook: sets.append(('run_at', None))
+    # A new (future) --run-at re-arms a one-shot that already fired / missed
+    # and was disabled — same as the REST PUT without an explicit `enabled`.
+    if run_at_ms is not None: sets.append(('enabled', 1))
     if args.webhook is not None:
         require_v7_columns(conn)
     cur_secret = dict(row).get('webhook_secret')

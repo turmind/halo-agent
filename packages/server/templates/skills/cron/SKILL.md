@@ -57,7 +57,7 @@ Sensible defaults if user didn't say:
 | workspace  | the user's current workspace (`pwd` / `/workspace` output)    |
 | agent      | `default`                                                     |
 | timezone   | leave unset (host time)                                       |
-| targets    | none (not pushed — the result is in the run history and session) |
+| targets    | none (not pushed — the result is in the job's session)        |
 | label      | summarize from prompt + schedule                              |
 | timeout    | leave unset (3600s) — see `--timeout-sec` below               |
 | session    | leave unset (the job's own session) — see `--session` below   |
@@ -81,6 +81,9 @@ Sensible defaults if user didn't say:
 fires once at that instant and auto-disables. Useful for "remind me at 3pm
 today" or "send the report next Monday morning". On `update`, passing one
 of the two switches the job's mode and clears the other; never pass both.
+`update <id> --run-at <future>` re-arms a one-shot and re-enables it, so a
+run can schedule its own next fire (a relay every N minutes) — no separate
+`enable` needed.
 
 | Spoken                            | Flag                                      |
 |-----------------------------------|-------------------------------------------|
@@ -126,8 +129,16 @@ any HTTP sender). Use it for "when X happens, run this".
 - On `update`: `--webhook on` switches to it (an existing secret is kept),
   `--schedule …` / `--run-at …` switches away (the secret is dropped).
 
-**Max run time (`--timeout-sec`, optional)** — each fire runs inside the
-server as a turn in the job's session; the server stops it after
+**How a fire runs** — each fire is a turn in the job's session, inside the
+server. Only a job with `--targets` whose session is free waits for that
+turn's reply and pushes it (a stateless job always waits). Without targets,
+or while the session is busy (a turn running, or held by another owner),
+the prompt is just delivered: a new turn, or folded into the running one at
+its next step; the run is recorded at once as delivered, and the reply stays
+in the session (or goes to whoever holds it) — no push, no timeout.
+
+**Max run time (`--timeout-sec`, optional)** — for a fire that waits for its
+reply, the server stops the turn after
 `timeout_sec` seconds (integer, 60–21600) and records the run as
 `timeout`, with nothing pushed. Unset = default 3600. Only set it when the user says so: a quick push job that
 should fail fast ("kill it after 5 minutes" → `--timeout-sec 300`), or a
@@ -142,9 +153,11 @@ only when the user wants the runs to continue a specific conversation (the
 agent then sees that session's history). Rules the user should hear once:
 - the session keeps **its own agent and access level** — `--agent` must
   match an existing session's agent (the helper refuses otherwise);
-- a scheduled / run-now fire is **skipped** while that session is busy (a
-  turn running in it, or held by another owner); a webhook job's accepted
-  events are never skipped — they join a user's turn in progress, and wait out another owner
+- a scheduled / run-now fire while that session is busy (a turn running in
+  it, or held by another owner) is **delivered, not pushed**: the prompt
+  joins the running turn, and the reply goes to whoever holds the session
+  (see *How a fire runs* above); a webhook job's accepted
+  events join a user's turn in progress, and wait out another owner
   (see *How an event enters the session* above);
 - if the user chats in that session while a run is in flight, the message
   joins the run, and the run pushes the reply of its last turn.
@@ -251,8 +264,9 @@ digest", construct the target with `{{channel.chat_id}}`:
 **Admin-UI cron jobs.** When invoked from the admin web UI there's no
 chat context (`{{channel.*}}` is empty). Either:
   - Tell the user "the cron will run silently — its result shows up in
-    the run history and the job's session but won't be pushed anywhere.
-    Add a target if you want a notification."
+    the job's session (the run history only records that it was
+    delivered) but won't be pushed anywhere. Add a target if you want a
+    notification."
   - Or ask for a chatId explicitly and pass it as a target.
 
 ### 4. Apply the change
@@ -273,7 +287,7 @@ shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
   --targets {{channel.type}}:{{channel.account_id}}:{{channel.chat_id}}
 ```
 
-**Create (silent — not pushed; the result is in the run history and session):**
+**Create (silent — not pushed; the result is in the job's session):**
 ```bash
 shell_exec: python3 ~/.halo/global/skills/cron/manage-cron.py create \
   --label "Nightly index rebuild" \

@@ -305,6 +305,9 @@ describe.skipIf(process.platform === 'win32')('cron folder / stateless — runne
     insertJob('job-b', { workingDir: 'sub' })
     await runToEnd('job-b')
     expect(sessionRow('cron-job-b')?.workingDir).toBe('sub')
+    // No targets: the run was delivered, its turn may still be going — a fire
+    // into a running turn leaves the folder for a later run.
+    await until(() => !h.sm.hasActiveWorkInTree('cron-job-b'))
     db.update(cronJobs).set({ workingDir: null }).where(eq(cronJobs.id, 'job-b')).run()
     await runToEnd('job-b')
     expect(sessionRow('cron-job-b')?.workingDir).toBeNull()

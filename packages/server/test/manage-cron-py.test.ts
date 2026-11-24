@@ -354,6 +354,23 @@ describe.skipIf(!HAS_PY && !process.env.CI)('manage-cron.py', () => {
       expect(job('cron-win')).toMatchObject({ schedule: '', runAt: future, activeUntil: null })
     })
 
+    it('--run-at <future> re-enables a disabled one-shot (a run re-arming itself); other edits leave enabled alone', () => {
+      const future = Date.now() + DAY
+      insertJob('cron-relay', { schedule: '', runAt: Date.now() - 60_000, enabled: 0 })
+      ok('update', 'cron-relay', '--prompt', 'p2')
+      expect(job('cron-relay')!.enabled).toBe(0)
+      ok('update', 'cron-relay', '--run-at', String(future))
+      expect(job('cron-relay')).toMatchObject({ runAt: future, enabled: 1 })
+      // Recurring → one-shot switch on a paused job: enabled too.
+      insertJob('cron-rec', { enabled: 0 })
+      ok('update', 'cron-rec', '--run-at', String(future))
+      expect(job('cron-rec')).toMatchObject({ schedule: '', runAt: future, enabled: 1 })
+      // A refused --run-at writes nothing.
+      insertJob('cron-past', { schedule: '', runAt: Date.now() - 60_000, enabled: 0 })
+      fails(['update', 'cron-past', '--run-at', String(Date.now() - 1000)])
+      expect(job('cron-past')!.enabled).toBe(0)
+    })
+
     it('"" clears timeout / session / folder / window back to their defaults', () => {
       insertJob('cron-c', { timeoutSec: 300, sessionId: 'chat-1', workingDir: 'sub', activeFrom: 1, activeUntil: Date.now() + DAY })
       ok('update', 'cron-c', '--timeout-sec', '', '--session', '', '--dir', '', '--active-from', '', '--active-until', '')

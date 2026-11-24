@@ -513,7 +513,8 @@ describe('webhook job on a picked session', () => {
 
   it('another job\'s run in the shared session: events wait, that run\'s end starts theirs', async () => {
     h.seedSession('chat-shared')
-    insertJob('job-timer', { sessionId: 'chat-shared', webhookSecret: null, schedule: '0 9 * * *', targets: '[]' })
+    // Its targets (insertJob's default) make the timer run wait for its reply, owning the session.
+    insertJob('job-timer', { sessionId: 'chat-shared', webhookSecret: null, schedule: '0 9 * * *' })
     insertJob('job-hook', { sessionId: 'chat-shared' })
     let release!: () => void
     h.turns.push({ reply: 'timer reply', gate: new Promise<void>((r) => { release = r }) }, { reply: 'event reply' })

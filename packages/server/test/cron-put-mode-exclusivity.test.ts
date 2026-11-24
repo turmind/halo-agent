@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -137,6 +137,29 @@ describe('PUT /cron/jobs/:id mode exclusivity', () => {
     const res = await put(id, { runAt: 'tomorrow' })
     expect(res.status).toBe(400)
     expect(getJob(id).runAt).toBeNull()
+  })
+
+  it('a future runAt re-enables a disabled job (a one-shot re-arming itself) and schedules it; explicit enabled:false wins', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const scheduled = (id: string) => log.mock.calls.some((c) => String(c[0]).startsWith(`[Cron] ${id} scheduled (runAt=`))
+    const id = await createJob('oneShot')
+    db.update(cronJobs).set({ enabled: 0, runAt: Date.now() - 60_000 }).where(eq(cronJobs.id, id)).run()
+    log.mockClear()
+    // Unrelated edit: stays off.
+    expect((await put(id, { label: 'x' })).status).toBe(200)
+    expect(getJob(id).enabled).toBe(0)
+    const at = FUTURE()
+    expect((await put(id, { runAt: at })).status).toBe(200)
+    expect(getJob(id)).toMatchObject({ runAt: at, enabled: 1 })
+    expect(scheduled(id)).toBe(true)
+
+    const off = await createJob('oneShot')
+    db.update(cronJobs).set({ enabled: 0 }).where(eq(cronJobs.id, off)).run()
+    log.mockClear()
+    expect((await put(off, { runAt: FUTURE(), enabled: false })).status).toBe(200)
+    expect(getJob(off).enabled).toBe(0)
+    expect(scheduled(off)).toBe(false)
+    log.mockRestore()
   })
 
   it('non-mode updates leave the trigger fields untouched', async () => {

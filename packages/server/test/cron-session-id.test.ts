@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm'
 import { createCronDb, setCronDb, cronJobs, cronRuns, CRON_MIGRATIONS, type CronDb } from '../src/db/cron-db.js'
 import { rawSqlite } from '../src/db/raw-sqlite.js'
 import { runJob, recoverRuns, _inflight } from '../src/cron/runner.js'
+import { registerCronDispatcher } from '../src/cron/dispatcher.js'
 import { createCronRoutes } from '../src/routes/cron.js'
 import { installCronHarness, teardownCronHarness, until, type CronHarness } from './helpers/cron-harness.js'
 
@@ -28,6 +29,7 @@ let wsDir: string
 let db: CronDb
 let h: CronHarness
 const app = createCronRoutes()
+registerCronDispatcher({ channelType: 'sid-ch', dispatch: async (accountId) => [{ channelType: 'sid-ch', accountId, ok: true }] })
 
 beforeEach(() => {
   tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'halo-cron-session-')))
@@ -215,7 +217,7 @@ describe.skipIf(process.platform === 'win32')('cron session_id — runner', () =
     expect(h.sm.getSessionById('chat-ro')).toMatchObject({ accessLevel: 'readonly' })
   })
 
-  it('skips while a turn is running in the session, without sending', async () => {
+  it('a turn running in the picked session: the fire is delivered into it (no skip)', async () => {
     let open!: () => void
     h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
     h.seedSession('chat-busy')
@@ -223,23 +225,26 @@ describe.skipIf(process.platform === 'win32')('cron session_id — runner', () =
     await until(() => h.inputs.length === 1)
     insertJob('job-c', 'chat-busy')
     const run = getRun(await runJob('job-c', 'scheduled'))
-    expect(run.status).toBe('skipped')
-    expect(run.failureReason).toContain('a turn is running')
-    expect(h.inputs).toHaveLength(1)
+    expect(run).toMatchObject({ status: 'succeeded', sessionId: 'chat-busy' })
+    expect(run.output).toContain('queued into its running turn')
     expect(_inflight.has('job-c')).toBe(false)
     open()
+    await until(() => h.inputs.length === 2 && !h.sm.hasActiveWorkInTree('chat-busy'))
   })
 
-  it('skips a second job on the same session while the first run is owed there', async () => {
+  it('a second job on the same session while the first run is owed there: delivered, the reply stays the first run\'s', async () => {
     let open!: () => void
     h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
     h.seedSession('shared')
     insertJob('job-e1', 'shared')
     insertJob('job-e2', 'shared')
+    // A push target: the first run waits for its reply, owning the session.
+    db.update(cronJobs).set({ targets: JSON.stringify([{ channelType: 'sid-ch', accountId: 'a1' }]) }).where(eq(cronJobs.id, 'job-e1')).run()
     const first = await runJob('job-e1', 'manual')
+    await until(() => h.inputs.length === 1)
     const second = getRun(await runJob('job-e2', 'manual'))
-    expect(second.status).toBe('skipped')
-    expect(second.failureReason).toContain(`owed to cron run ${first}`)
+    expect(second.status).toBe('succeeded')
+    expect(second.output).toContain(`reply goes to cron run ${first}`)
     open()
     await until(() => getRun(first).status === 'succeeded')
   })

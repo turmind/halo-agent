@@ -4,12 +4,16 @@
  * the server's own SessionManager, dispatches the run's final reply to the
  * job's channel targets, and persists a `cron_runs` audit row.
  *
- *   - a fire appends + sends the prompt to the job's session and stamps the
- *     session's `reply_to` with `{ cron: runId }`; the run ends at relay's
- *     turn-end hook once the subtree is quiet (`finishRun`) — the same gate
- *     relay / A2A / `/invocations` use, so a fan-out run reports once
- *   - per-job timeout (`timeout_sec`, default 3600s) via a Node timer that
- *     stops the session (`stopSession`)
+ *   - a fire with targets on a free session (or any stateless fire) appends +
+ *     sends the prompt to the job's session and stamps the session's
+ *     `reply_to` with `{ cron: runId }`; the run ends at relay's turn-end hook
+ *     once the subtree is quiet (`finishRun`) — the same gate relay / A2A /
+ *     `/invocations` use, so a fan-out run reports once
+ *   - every other timer / run-now fire (no targets, or the session busy) is
+ *     delivered: the prompt goes in, the run is recorded at once, the reply
+ *     belongs to the session (or its current owner)
+ *   - per-job timeout (`timeout_sec`, default 3600s) on an awaited run via a
+ *     Node timer that stops the session (`stopSession`)
  *   - in-memory state is rebuilt from the db on every server boot: schedules
  *     from `cron_jobs`, in-flight runs from `cron_runs` + the session's
  *     `reply_to` — a run cut off by a restart resumes through the run ledger's
@@ -57,7 +61,7 @@ const RUN_TIMEOUT_SEC = 3600
 /** How long a timed-out run waits for `stopSession` to land before giving up
  *  on it: the run is already recorded `timeout` and its `reply_to` cleared, so
  *  a tool that ignores its abort signal only keeps its own turn alive — later
- *  fires see the session busy and skip. (The cli-child runner could SIGKILL
+ *  fires see the session busy and are delivered into it. (The cli-child runner could SIGKILL
  *  here; in-process there is nothing to kill — accepted, plans/cron-in-process.md R1.) */
 const STOP_SETTLE_MS = 30_000
 
@@ -593,7 +597,7 @@ function isRunning(runId: string): boolean {
  *  so the stop's own turn end finds no pointer. A stop that doesn't settle (a
  *  tool ignoring its abort signal) leaves only that turn running; the job
  *  stays blocked for STOP_SETTLE_MS, after that later fires see the session
- *  busy and skip. */
+ *  busy and are delivered into it. */
 async function timeoutRun(ctx: RunCtx, timeoutSec: number): Promise<void> {
   if (_runs.get(ctx.runId) !== ctx || _finishing.has(ctx.runId)) return
   untrackRun(ctx.runId)
@@ -1116,7 +1120,9 @@ export function reconcileFromDb(): void {
  * Execute a job once, in-process: persists a `cron_runs` row, appends + sends
  * the prompt to the job's session and points the session's `reply_to` at the
  * run. Returns as soon as the prompt is in — the run ends at its session's
- * turn end (finishRun), its timeout, or a local stop. Used by scheduled fires,
+ * turn end (finishRun), its timeout, or a local stop; a delivered fire (no
+ * targets, or a busy session — see the guards below) takes no pointer and is
+ * recorded before this returns. Used by scheduled fires,
  * the run-now button in the admin UI and webhook events (startOrInject; the
  * opening message then carries every pending event — run-now on a webhook
  * job sends the prompt alone).
@@ -1184,13 +1190,18 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
   _inflight.add(jobId)
   let tracked = false
   try {
-    // Session-level guards. A timer / run-now fire is only ever skipped, never
-    // injected into a busy session: its folder can't change mid-turn, its
-    // timeout would stop the other turn, and the reply would be whose? Picked
-    // sessions only — a job's own session can only be busy if someone chats in
-    // it. A webhook fire queues behind a user's turn (its events must not be
+    // Session-level guards → the fire's mode. A timer / run-now fire waits for
+    // its reply (reply_to = {cron}, finishRun, push, timeout) only when it has
+    // targets to push to and the session is free — or on a stateless job (a
+    // fresh session; the run record is its only result). Otherwise it is
+    // delivered: the prompt goes in (a new turn, or queued + soft interrupt
+    // into the running one), the run is recorded at once, and the reply
+    // belongs to the session's owner if any — no pointer, push, timeout or
+    // stop. A webhook fire queues behind a user's turn (its events must not be
     // dropped) and only waits out another owner of the wrap-up.
     const webhook = triggerKind === 'webhook'
+    const hasTargets = parseTargets(job.targets).length > 0
+    let deliver = false
     let host: CronSessionHost | null = null
     let hostError: string | null = null
     if (fs.existsSync(job.workspacePath) && _sessionRegistry) {
@@ -1202,7 +1213,9 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
         console.warn(`[Cron] ${jobId}: webhook events stay pending — ${busy}`)
         return ''
       }
-      if (busy) return skip(busy)
+      deliver = !webhook && !job.stateless && (!hasTargets || !!busy)
+      // A stateless session is fresh, never shared: not reached in practice.
+      if (busy && !deliver) return skip(busy)
     }
 
     // Persist a 'running' row up front so the UI sees the run mid-flight.
@@ -1252,10 +1265,10 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       return fail(`session ${sessionId} runs agent ${existing.agentId}, not the job's ${job.agentId}; delete that session or turn on "new session every run" to change the agent`)
     }
     try {
-      // A webhook fire queues behind a running turn, whose folder can't change
-      // mid-turn (setWorkingDir throws): the folder applies on a later run.
+      // A webhook / delivered fire queues behind a running turn, whose folder
+      // can't change mid-turn (setWorkingDir throws): it applies on a later run.
       if (existing) {
-        if (!(webhook && host.hasActiveWorkInTree(sessionId))) host.setWorkingDir(sessionId, folderAbs)
+        if (!((webhook || deliver) && host.hasActiveWorkInTree(sessionId))) host.setWorkingDir(sessionId, folderAbs)
       }
       // A webhook job's session is titled up front: its first message is an
       // event payload, a poor title.
@@ -1275,21 +1288,30 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       console.warn(`[Cron] ${jobId}: webhook events stay pending — ${busy}`)
       return ''
     }
-    if (busy) return fail(busy)
+    // A timer / run-now fire that finds it taken meanwhile is delivered instead.
+    if (busy && !webhook) {
+      if (job.stateless) return fail(busy)
+      deliver = true
+    }
     // Recorded meanwhile by another cron.db writer: nothing to run for.
     if (!isRunning(runId)) return runId
-    takeReplyTo(host.getDb(), sessionId, { cron: runId }, `cron:${runId}`)
-    // Tracked before the send: the turn can end (finishRun) before
-    // sendUserMessage resolves, and the notice listener must see it all.
-    // Per-job timeout override (cron_jobs.timeout_sec, validated 60–21600 at
-    // the write points); NULL falls back to the 3600s default.
-    const timeoutSec = job.timeoutSec ?? RUN_TIMEOUT_SEC
-    trackRun({ runId, jobId, sessionId, workspacePath: job.workspacePath, host }, startedAt + timeoutSec * 1000 - Date.now(), timeoutSec)
-    tracked = true
+    if (!deliver) {
+      takeReplyTo(host.getDb(), sessionId, { cron: runId }, `cron:${runId}`)
+      // Tracked before the send: the turn can end (finishRun) before
+      // sendUserMessage resolves, and the notice listener must see it all.
+      // Per-job timeout override (cron_jobs.timeout_sec, validated 60–21600 at
+      // the write points); NULL falls back to the 3600s default.
+      const timeoutSec = job.timeoutSec ?? RUN_TIMEOUT_SEC
+      trackRun({ runId, jobId, sessionId, workspacePath: job.workspacePath, host }, startedAt + timeoutSec * 1000 - Date.now(), timeoutSec)
+      tracked = true
+    }
     // Claimed in the same synchronous slice as trackRun: an event stored
     // before this point rides the opening message, one stored after finds the
     // tracked run and is injected (startOrInject).
     const events = webhook ? claimPendingEvents(jobId, runId, sessionId) : []
+    // Delivered: whoever holds the session as the prompt goes in gets its reply.
+    const owner = deliver ? readReplyTo(host.getDb(), sessionId) : null
+    let sendState: 'running' | 'queued'
     try {
       // The UI row shows the prompt alone; the model also gets the preamble:
       // nothing else in its view says nobody will answer (the `cron-*` id is
@@ -1299,12 +1321,26 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       const stamp = host.appendUserMessage(sessionId, [job.userPrompt, ...texts.map((t) => t.ui)].filter(Boolean).join('\n\n'))
       stampEvents(events.map((ev) => ev.id), stamp)
       // accessLevel undefined: the session keeps its own level.
-      await host.sendUserMessage(sessionId, [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].filter(Boolean).join('\n\n'), undefined, undefined, stamp)
+      sendState = await host.sendUserMessage(sessionId, [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].filter(Boolean).join('\n\n'), undefined, undefined, stamp)
     } catch (err) {
-      untrackRun(runId)
-      tracked = false
-      clearOwnPointer(host.getDb(), sessionId, runId)
+      if (tracked) {
+        untrackRun(runId)
+        tracked = false
+        clearOwnPointer(host.getDb(), sessionId, runId)
+      }
       return fail(err instanceof Error ? err.message : String(err))
+    }
+    if (deliver) {
+      // Delivered: the run ends here. The turn's reply goes to whoever owns
+      // the session (relay / A2A / another run), else it stays in the session.
+      const output = `delivered into session ${sessionId} (${sendState === 'queued' ? 'queued into its running turn' : 'new turn'}; not awaited; reply goes to ${owner ? ownerLabel(owner) : 'the session'})`
+      finalize(runId, jobId, { status: 'succeeded', output, exitCode: null, failureReason: null, dispatchResults: [] })
+      console.log(`[Cron] run ${runId} (job ${jobId}, ${triggerKind}) ${output}`)
+      pruneOldRuns(jobId).catch((err) => console.warn(`[Cron] prune after run ${runId} failed: ${err instanceof Error ? err.message : String(err)}`))
+      // Events that reached a webhook job during its run-now: their own run
+      // (deferred — the job is released in `finally` below).
+      kickPendingEvents(jobId)
+      return runId
     }
     console.log(`[Cron] run ${runId} (job ${jobId}, ${triggerKind}) → ${sessionId}`)
     return runId
@@ -1401,7 +1437,8 @@ function finalize(runId: string, jobId: string, a: FinalizeArgs): boolean {
   // Auto-disable one-shot (at-mode) jobs after they complete so they don't
   // re-fire on the next reload pass. We keep the row (history + run-now
   // remains usable) — only the schedule is paused. The runner's reconcile
-  // loop sees enabled=0 and tears down the schedule.
+  // loop sees enabled=0 and tears down the schedule. A runAt moved into the
+  // future meanwhile (the run re-armed its own job) stays enabled.
   const job = db.select().from(cronJobs).where(eq(cronJobs.id, jobId)).get()
   const patch: Record<string, unknown> = {
     lastRunStatus: a.status,
@@ -1409,7 +1446,7 @@ function finalize(runId: string, jobId: string, a: FinalizeArgs): boolean {
     lastRunId: runId,
     updatedAt: completedAt,
   }
-  if (job?.runAt) patch.enabled = 0
+  if (job?.runAt && job.runAt <= completedAt) patch.enabled = 0
   db.update(cronJobs).set(patch).where(eq(cronJobs.id, jobId)).run()
   broadcast({ type: 'cron:run_changed', jobId, runId, status: a.status })
   // sessionAgentId is read after the run, so a first fire's push already

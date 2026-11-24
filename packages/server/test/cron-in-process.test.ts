@@ -7,7 +7,7 @@ import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src
 import { agentSessions } from '../src/db/schema.js'
 import { readReplyTo, writeReplyTo, takeReplyTo } from '../src/agents/relay.js'
 import { registerCronDispatcher, type DispatchResult } from '../src/cron/dispatcher.js'
-import { runJob, _inflight, _runs } from '../src/cron/runner.js'
+import { runJob, scheduleJob, _inflight, _runs } from '../src/cron/runner.js'
 import { installCronHarness, teardownCronHarness, until, type CronHarness } from './helpers/cron-harness.js'
 
 /**
@@ -52,11 +52,15 @@ afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true })
 })
 
+/** A push target: a timer / run-now fire waits for its reply only when it has
+ *  one (and the session is free) — without, it is delivered. */
+const TARGET = JSON.stringify([{ channelType: 'test-ch', accountId: 'acc1' }])
+
 function insertJob(id: string, fields: Partial<typeof cronJobs.$inferInsert> = {}): void {
   const now = Date.now()
   db.insert(cronJobs).values({
     id, workspacePath: ws, agentId: 'default', userPrompt: 'daily report', schedule: '0 9 * * *',
-    targets: '[]', enabled: 1, createdAt: now, updatedAt: now, ...fields,
+    targets: TARGET, enabled: 1, createdAt: now, updatedAt: now, ...fields,
   }).run()
 }
 const getRun = (runId: string) => db.select().from(cronRuns).where(eq(cronRuns.id, runId)).get()!
@@ -199,10 +203,34 @@ describe('in-process cron run — happy path', () => {
   })
 
   it('a one-shot job is disabled once its run ends', async () => {
-    insertJob('cron-once', { schedule: '', runAt: Date.now() + 60_000 })
+    // Its timer fired: runAt is now or past.
+    insertJob('cron-once', { schedule: '', runAt: Date.now() })
     const runId = await runJob('cron-once', 'scheduled')
     await settled(runId)
     expect(getJob('cron-once').enabled).toBe(0)
+  })
+
+  it('a one-shot the run re-armed (runAt moved to the future) stays enabled, and fires then', async () => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    insertJob('cron-relay', { schedule: '', runAt: Date.now() })
+    const first = await runJob('cron-relay', 'scheduled')
+    await until(() => h.inputs.length === 1)
+    // The turn re-schedules its own job (manage-cron.py update --run-at, another connection).
+    db.update(cronJobs).set({ runAt: Date.now() + 400 }).where(eq(cronJobs.id, 'cron-relay')).run()
+    open()
+    await settled(first)
+    expect(getRun(first).status).toBe('succeeded')
+    expect(getJob('cron-relay').enabled).toBe(1)
+    // What reconcile does for the out-of-band write: re-arm from the row.
+    scheduleJob('cron-relay')
+    await until(() => db.select().from(cronRuns).all().length === 2)
+    const second = db.select().from(cronRuns).all().find((r) => r.id !== first)!
+    await settled(second.id)
+    expect(second.triggerKind).toBe('scheduled')
+    expect(getRun(second.id).status).toBe('succeeded')
+    // The second run's runAt was not moved: now it is disabled.
+    expect(getJob('cron-relay').enabled).toBe(0)
   })
 })
 
@@ -219,41 +247,58 @@ describe('in-process cron run — guards', () => {
     expect(getRun(first).status).toBe('succeeded')
   })
 
-  it('a session owed to someone else (relay / A2A / another job) → skipped, its pointer untouched', async () => {
+  it('targets, session owed to someone else (relay / A2A) → delivered: no push, the owner\'s pointer untouched', async () => {
     h.seedSession('shared')
     writeReplyTo(h.sm.getDb(), 'shared', { a2a: 'task-1' })
     insertJob('job-s', { sessionId: 'shared' })
-    const run = getRun(await runJob('job-s', 'manual'))
-    expect(run).toMatchObject({ status: 'skipped', failureReason: 'session shared busy: owed to A2A task task-1' })
+    const runId = await runJob('job-s', 'manual')
+    expect(getRun(runId)).toMatchObject({
+      status: 'succeeded', failureReason: null, dispatchResults: '[]',
+      output: 'delivered into session shared (new turn; not awaited; reply goes to A2A task task-1)',
+    })
+    expect(_inflight.has('job-s')).toBe(false)
+    expect(_runs.size).toBe(0)
+    await until(() => h.inputs.length === 1 && !h.sm.hasActiveWorkInTree('shared'))
+    expect(h.inputs[0]).toContain('daily report')
     expect(readReplyTo(h.sm.getDb(), 'shared')).toEqual({ a2a: 'task-1' })
-    expect(h.inputs).toEqual([])
+    expect(sent).toEqual([])
   })
 
-  it('two jobs on one picked session: the second skips while the first is owed', async () => {
+  it('two jobs on one picked session: the second is delivered into the first\'s turn, the first still pushes', async () => {
     let open!: () => void
-    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    h.turns.push({ reply: 'first reply', gate: new Promise<void>((r) => { open = r }) }, { reply: 'merged reply' })
     h.seedSession('picked')
     insertJob('job-1', { sessionId: 'picked' })
     insertJob('job-2', { sessionId: 'picked' })
     const first = await runJob('job-1', 'manual')
+    await until(() => h.inputs.length === 1)
     const second = getRun(await runJob('job-2', 'manual'))
-    expect(second.status).toBe('skipped')
-    expect(second.failureReason).toBe(`session picked busy: owed to cron run ${first}`)
+    expect(second).toMatchObject({ status: 'succeeded', output: `delivered into session picked (queued into its running turn; not awaited; reply goes to cron run ${first})` })
+    expect(readReplyTo(h.sm.getDb(), 'picked')).toEqual({ cron: first })
     open()
     await settled(first)
+    // The second prompt joined the first run's session: its turn's reply is the first run's.
+    expect(h.inputs[1]).toContain('daily report')
+    expect(getRun(first)).toMatchObject({ status: 'succeeded', output: 'merged reply' })
+    expect(sent).toEqual([{ accountId: 'acc1', text: 'merged reply' }])
   })
 
-  it('a turn running in the session (someone chatting) → skipped, without sending', async () => {
+  it('targets, a turn running in the session (someone chatting) → queued into it, folder left as is, no pointer, no push', async () => {
     let open!: () => void
     h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
     h.seedSession('chat')
     void h.sm.sendUserMessage('chat', 'hi')
     await until(() => h.inputs.length === 1)
-    insertJob('job-c', { sessionId: 'chat' })
+    insertJob('job-c', { sessionId: 'chat', workingDir: 'sub' })
     const run = getRun(await runJob('job-c', 'scheduled'))
-    expect(run).toMatchObject({ status: 'skipped', failureReason: 'session chat busy: a turn is running in it' })
+    expect(run).toMatchObject({ status: 'succeeded', output: 'delivered into session chat (queued into its running turn; not awaited; reply goes to the session)' })
     expect(_inflight.has('job-c')).toBe(false)
+    expect(readReplyTo(h.sm.getDb(), 'chat')).toBeNull()
     open()
+    await until(() => h.inputs.length === 2 && !h.sm.hasActiveWorkInTree('chat'))
+    expect(h.inputs[1]).toContain('daily report')
+    expect(h.sm.getDb().select().from(agentSessions).where(eq(agentSessions.id, 'chat')).get()!.workingDir).toBeNull()
+    expect(sent).toEqual([])
   })
 
   it('a hand-edited agent mismatch fails the run before anything is sent', async () => {
@@ -345,5 +390,99 @@ describe('in-process cron run — timeout / stop / supersede', () => {
     // …and a local stop doesn't touch it either.
     await h.sm.stopSession('prod-sess')
     expect(readReplyTo(h.sm.getDb(), 'prod-sess')).toEqual({ cron: 'run-of-another-server' })
+  })
+})
+
+describe('in-process cron run — no targets: delivered, not awaited', () => {
+  it('idle session: a new turn, the run is `succeeded` at once; a sub-agent reporting for hours never times it out or stops it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true })
+    const stop = vi.spyOn(h.sm, 'stopSession')
+    insertJob('cron-wake', { targets: '[]', timeoutSec: 60, schedule: '', runAt: Date.now() })
+    // A long-lived worker under the root: its tree never goes quiet.
+    h.sm.getDb().insert(agentSessions).values({
+      id: 'cron-wake>worker', parentId: 'cron-wake', agentId: 'default', agentName: 'default', description: '',
+      createdAt: 1000, updatedAt: 1000, stoppedAt: null, archivedAt: null,
+    }).run()
+    h.seedSession('cron-wake')
+    const runId = await runJob('cron-wake', 'scheduled')
+    expect(getRun(runId)).toMatchObject({
+      status: 'succeeded', failureReason: null, dispatchResults: '[]', sessionId: 'cron-wake',
+      output: 'delivered into session cron-wake (new turn; not awaited; reply goes to the session)',
+    })
+    expect(readReplyTo(h.sm.getDb(), 'cron-wake')).toBeNull()
+    expect(_inflight.has('cron-wake')).toBe(false)
+    expect(_runs.size).toBe(0)
+    // A one-shot whose runAt was not moved is disabled as before.
+    expect(getJob('cron-wake')).toMatchObject({ enabled: 0, lastRunStatus: 'succeeded', lastRunId: runId })
+    await until(() => h.inputs.length === 1 && !h.sm.hasActiveWorkInTree('cron-wake'))
+    // The worker reports back, turn after turn, far past the job's timeout.
+    for (let i = 0; i < 3; i++) {
+      await h.sm.sendUserMessage('cron-wake', `(from: session cron-wake>worker) report ${i}`)
+      await vi.advanceTimersByTimeAsync(3600_000)
+    }
+    await until(() => h.inputs.length === 4 && !h.sm.hasActiveWorkInTree('cron-wake'))
+    expect(getRun(runId).status).toBe('succeeded')
+    expect(stop).not.toHaveBeenCalled()
+    expect(sent).toEqual([])
+  })
+
+  it('a turn running in the session: the prompt joins it (queued + soft interrupt), no pointer taken', async () => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    h.seedSession('cron-busy')
+    void h.sm.sendUserMessage('cron-busy', 'chatting')
+    await until(() => h.inputs.length === 1)
+    insertJob('cron-busy', { targets: '[]' })
+    const runId = await runJob('cron-busy', 'scheduled')
+    expect(getRun(runId)).toMatchObject({ status: 'succeeded', output: 'delivered into session cron-busy (queued into its running turn; not awaited; reply goes to the session)' })
+    const live = (h.sm as unknown as { sessions: Map<string, { messageQueue: unknown[]; interruptRequested: boolean }> }).sessions.get('cron-busy')!
+    expect(live.messageQueue).toHaveLength(1)
+    expect(live.interruptRequested).toBe(true)
+    expect(readReplyTo(h.sm.getDb(), 'cron-busy')).toBeNull()
+    open()
+    await until(() => h.inputs.length === 2 && !h.sm.hasActiveWorkInTree('cron-busy'))
+    expect(h.inputs[1]).toContain('[Unattended cron run')
+    expect(h.inputs[1]).toContain('daily report')
+  })
+
+  it('a relay owner keeps its pointer and gets the turn\'s reply; the job releases at once', async () => {
+    h.seedSession('cron-wx')
+    writeReplyTo(h.sm.getDb(), 'cron-wx', { workspace: ws, sessionId: 'wx-caller' })
+    insertJob('cron-wx', { targets: '[]' })
+    const runId = await runJob('cron-wx', 'scheduled')
+    expect(getRun(runId).output).toBe('delivered into session cron-wx (new turn; not awaited; reply goes to relay from wx-caller)')
+    expect(readReplyTo(h.sm.getDb(), 'cron-wx')).toMatchObject({ sessionId: 'wx-caller' })
+    expect(_inflight.has('cron-wx')).toBe(false)
+  })
+
+  it('run-now of a no-target job is delivered the same way; a second click right after is not "still in progress"', async () => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    insertJob('cron-rn', { targets: '[]' })
+    const a = getRun(await runJob('cron-rn', 'manual'))
+    const b = getRun(await runJob('cron-rn', 'manual'))
+    expect(a.output).toBe('delivered into session cron-rn (new turn; not awaited; reply goes to the session)')
+    expect(b.output).toBe('delivered into session cron-rn (queued into its running turn; not awaited; reply goes to the session)')
+    open()
+    await until(() => h.inputs.length === 2 && !h.sm.hasActiveWorkInTree('cron-rn'))
+  })
+
+  it('stateless without targets still waits for its reply: the run record is its result', async () => {
+    h.turns.push({ reply: 'the snapshot' })
+    insertJob('cron-sln', { targets: '[]', stateless: 1 })
+    const runId = await runJob('cron-sln', 'manual')
+    expect(getRun(runId).status).toBe('running')
+    expect(readReplyTo(h.sm.getDb(), getRun(runId).sessionId!)).toEqual({ cron: runId })
+    await settled(runId)
+    expect(getRun(runId)).toMatchObject({ status: 'succeeded', output: 'the snapshot' })
+  })
+
+  it('the agent-mismatch check still fails a delivered fire before anything is sent', async () => {
+    h.seedSession('cron-mm', { agentId: 'coder' })
+    insertJob('cron-mm', { targets: '[]' })
+    const run = getRun(await runJob('cron-mm', 'scheduled'))
+    expect(run.status).toBe('failed')
+    expect(run.failureReason).toContain('session cron-mm runs agent coder')
+    expect(h.inputs).toEqual([])
   })
 })

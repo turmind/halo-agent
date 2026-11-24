@@ -452,6 +452,10 @@ export function createCronRoutes(): Hono {
     if (body.activeUntil !== undefined) patch.activeUntil = body.activeUntil
     if (body.targets !== undefined) patch.targets = JSON.stringify(body.targets)
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
+    // A new runAt (validated future above) re-arms a one-shot that already
+    // fired / missed and was disabled — how a run re-schedules itself. An
+    // explicit `enabled` in the body wins.
+    else if (hasRunAt) patch.enabled = 1
 
     db.update(cronJobs).set(patch).where(eq(cronJobs.id, id)).run()
 

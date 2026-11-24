@@ -7,6 +7,7 @@ import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src
 import { createEvoDb, setEvoDb, evolutionRuns, type EvoDb } from '../src/db/evo-db.js'
 import { createCronHookRoutes } from '../src/routes/cron-hooks.js'
 import { runJob, _inflight } from '../src/cron/runner.js'
+import { registerCronDispatcher } from '../src/cron/dispatcher.js'
 import { installCronHarness, teardownCronHarness, until, type CronHarness } from './helpers/cron-harness.js'
 
 /**
@@ -24,6 +25,9 @@ let evoDb: EvoDb
 let h: CronHarness
 const realHome = process.env.HOME
 const hooks = createCronHookRoutes()
+// A push target makes a run-now fire wait for its reply (reply_to = {cron});
+// without one it is only delivered.
+registerCronDispatcher({ channelType: 'evo-ch', dispatch: async (accountId) => [{ channelType: 'evo-ch', accountId, ok: true }] })
 
 beforeEach(() => {
   tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'halo-cron-evo-')))
@@ -48,7 +52,7 @@ function insertJob(id: string, fields: Partial<typeof cronJobs.$inferInsert> = {
   const now = Date.now()
   db.insert(cronJobs).values({
     id, workspacePath: ws, agentId: 'default', userPrompt: 'daily report', schedule: '0 9 * * *',
-    targets: '[]', enabled: 1, createdAt: now, updatedAt: now, ...fields,
+    targets: JSON.stringify([{ channelType: 'evo-ch', accountId: 'a1' }]), enabled: 1, createdAt: now, updatedAt: now, ...fields,
   }).run()
 }
 const evoRuns = () => evoDb.select().from(evolutionRuns).all()
