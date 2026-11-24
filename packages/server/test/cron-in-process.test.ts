@@ -5,7 +5,8 @@ import path from 'node:path'
 import { eq } from 'drizzle-orm'
 import { createCronDb, setCronDb, cronJobs, cronRuns, type CronDb } from '../src/db/cron-db.js'
 import { agentSessions } from '../src/db/schema.js'
-import { readReplyTo, writeReplyTo, takeReplyTo } from '../src/agents/relay.js'
+import { readReplyTo, writeReplyTo, takeReplyTo, setRelayRegistry, type RelayRegistry, type RelayTarget } from '../src/agents/relay.js'
+import * as workingDir from '../src/agents/working-dir.js'
 import { registerCronDispatcher, type DispatchResult } from '../src/cron/dispatcher.js'
 import { runJob, scheduleJob, _inflight, _runs } from '../src/cron/runner.js'
 import { installCronHarness, teardownCronHarness, until, type CronHarness } from './helpers/cron-harness.js'
@@ -232,6 +233,20 @@ describe('in-process cron run — happy path', () => {
     // The second run's runAt was not moved: now it is disabled.
     expect(getJob('cron-relay').enabled).toBe(0)
   })
+
+  it('run-now of a one-shot whose runAt is still ahead: stays enabled, and its timer still fires at runAt', async () => {
+    insertJob('cron-ahead', { schedule: '', runAt: Date.now() + 400 })
+    scheduleJob('cron-ahead')
+    const manual = await runJob('cron-ahead', 'manual')
+    await settled(manual)
+    expect(getRun(manual).status).toBe('succeeded')
+    expect(getJob('cron-ahead').enabled).toBe(1)
+    await until(() => db.select().from(cronRuns).all().length === 2)
+    const fired = db.select().from(cronRuns).all().find((r) => r.id !== manual)!
+    await settled(fired.id)
+    expect(fired.triggerKind).toBe('scheduled')
+    expect(getJob('cron-ahead').enabled).toBe(0)
+  })
 })
 
 describe('in-process cron run — guards', () => {
@@ -446,13 +461,29 @@ describe('in-process cron run — no targets: delivered, not awaited', () => {
   })
 
   it('a relay owner keeps its pointer and gets the turn\'s reply; the job releases at once', async () => {
-    h.seedSession('cron-wx')
-    writeReplyTo(h.sm.getDb(), 'cron-wx', { workspace: ws, sessionId: 'wx-caller' })
-    insertJob('cron-wx', { targets: '[]' })
-    const runId = await runJob('cron-wx', 'scheduled')
-    expect(getRun(runId).output).toBe('delivered into session cron-wx (new turn; not awaited; reply goes to relay from wx-caller)')
-    expect(readReplyTo(h.sm.getDb(), 'cron-wx')).toMatchObject({ sessionId: 'wx-caller' })
-    expect(_inflight.has('cron-wx')).toBe(false)
+    // The caller's side of the relay: what deliverRelayReport sends it.
+    const reports: Array<{ sid: string; text: string }> = []
+    setRelayRegistry({ getOrCreate: () => ({
+      workspaceRoot: '/caller', getDb: () => { throw new Error('not used') }, getSessionById: () => null,
+      createSession: async () => { throw new Error('not used') }, appendUserMessage: () => '',
+      sendUserMessage: async (sid: string, text: string) => { reports.push({ sid, text }); return 'running' as const },
+      interruptSession: () => {}, stopSession: async () => {}, getSessionOutput: () => '{}', listSessions: () => ({ sessions: [] }),
+    } satisfies RelayTarget) })
+    try {
+      h.turns.push({ reply: 'the wx digest' })
+      h.seedSession('cron-wx')
+      writeReplyTo(h.sm.getDb(), 'cron-wx', { workspace: '/caller', sessionId: 'wx-caller' })
+      insertJob('cron-wx', { targets: '[]' })
+      const runId = await runJob('cron-wx', 'scheduled')
+      expect(getRun(runId).output).toBe('delivered into session cron-wx (new turn; not awaited; reply goes to relay from wx-caller)')
+      expect(_inflight.has('cron-wx')).toBe(false)
+      await until(() => reports.length === 1)
+      expect(reports[0].sid).toBe('wx-caller')
+      expect(reports[0].text).toContain('the wx digest')
+      expect(sent).toEqual([])
+    } finally {
+      setRelayRegistry(null as unknown as RelayRegistry)
+    }
   })
 
   it('run-now of a no-target job is delivered the same way; a second click right after is not "still in progress"', async () => {
@@ -475,6 +506,70 @@ describe('in-process cron run — no targets: delivered, not awaited', () => {
     expect(readReplyTo(h.sm.getDb(), getRun(runId).sessionId!)).toEqual({ cron: runId })
     await settled(runId)
     expect(getRun(runId)).toMatchObject({ status: 'succeeded', output: 'the snapshot' })
+  })
+
+  describe('taken while the fire awaited its setup (re-check past the awaits)', () => {
+    /** Hold the run at resolveWorkingDir — the first await past the first
+     *  busy check — and run `meanwhile` there. */
+    function holdAtFolder(meanwhile: () => Promise<void>) {
+      const real = workingDir.resolveWorkingDir
+      vi.spyOn(workingDir, 'resolveWorkingDir').mockImplementation(async (root, input) => {
+        await meanwhile()
+        return real(root, input)
+      })
+    }
+    const live = (id: string) => (h.sm as unknown as { sessions: Map<string, { messageQueue: unknown[] }> }).sessions.get(id)!
+
+    it('an owner took it: delivered instead, its pointer untouched, the run not tracked', async () => {
+      fs.mkdirSync(path.join(ws, 'sub'), { recursive: true })
+      h.seedSession('cron-flip')
+      insertJob('cron-flip', { workingDir: 'sub' })
+      holdAtFolder(async () => { writeReplyTo(h.sm.getDb(), 'cron-flip', { workspace: ws, sessionId: 'wx-caller' }) })
+      const runId = await runJob('cron-flip', 'scheduled')
+      expect(getRun(runId)).toMatchObject({ status: 'succeeded', output: 'delivered into session cron-flip (new turn; not awaited; reply goes to relay from wx-caller)' })
+      expect(readReplyTo(h.sm.getDb(), 'cron-flip')).toEqual({ workspace: ws, sessionId: 'wx-caller' })
+      expect(_runs.size).toBe(0)
+      expect(_inflight.has('cron-flip')).toBe(false)
+      await until(() => h.inputs.length === 1 && !h.sm.hasActiveWorkInTree('cron-flip'))
+      expect(sent).toEqual([])
+    })
+
+    it('a turn started in it: delivered into that turn (queued), no pointer, not tracked', async () => {
+      fs.mkdirSync(path.join(ws, 'sub'), { recursive: true })
+      let open!: () => void
+      h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+      h.seedSession('cron-flip2')
+      insertJob('cron-flip2', { workingDir: 'sub' })
+      holdAtFolder(async () => {
+        void h.sm.sendUserMessage('cron-flip2', 'chatting')
+        await until(() => h.inputs.length === 1)
+      })
+      const runId = await runJob('cron-flip2', 'scheduled')
+      expect(getRun(runId)).toMatchObject({ status: 'succeeded', output: 'delivered into session cron-flip2 (queued into its running turn; not awaited; reply goes to the session)' })
+      expect(live('cron-flip2').messageQueue).toHaveLength(1)
+      expect(readReplyTo(h.sm.getDb(), 'cron-flip2')).toBeNull()
+      expect(_runs.size).toBe(0)
+      open()
+      await until(() => h.inputs.length === 2 && !h.sm.hasActiveWorkInTree('cron-flip2'))
+      expect(sent).toEqual([])
+    })
+
+    it('stateless: fails busy instead, nothing sent', async () => {
+      fs.mkdirSync(path.join(ws, 'sub'), { recursive: true })
+      insertJob('cron-flip3', { workingDir: 'sub', stateless: 1 })
+      // The fresh session id is only known once the run row exists: take
+      // whichever session the run row names, right before its creation.
+      holdAtFolder(async () => {
+        const run = db.select().from(cronRuns).all().find((r) => r.jobId === 'cron-flip3')!
+        h.seedSession(run.sessionId!)
+        writeReplyTo(h.sm.getDb(), run.sessionId!, { workspace: ws, sessionId: 'wx-caller' })
+      })
+      const runId = await runJob('cron-flip3', 'scheduled')
+      expect(getRun(runId)).toMatchObject({ status: 'failed' })
+      expect(getRun(runId).failureReason).toContain('busy: owed to relay from wx-caller')
+      expect(_runs.size).toBe(0)
+      expect(h.inputs).toEqual([])
+    })
   })
 
   it('the agent-mismatch check still fails a delivered fire before anything is sent', async () => {

@@ -1213,6 +1213,9 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
         console.warn(`[Cron] ${jobId}: webhook events stay pending — ${busy}`)
         return ''
       }
+      // One-way: the re-check past the awaits below only flips an awaited
+      // fire to delivered, never back — a job with targets found busy here
+      // stays delivered (not pushed) even if the session is free by then.
       deliver = !webhook && !job.stateless && (!hasTargets || !!busy)
       // A stateless session is fresh, never shared: not reached in practice.
       if (busy && !deliver) return skip(busy)
@@ -1265,10 +1268,12 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       return fail(`session ${sessionId} runs agent ${existing.agentId}, not the job's ${job.agentId}; delete that session or turn on "new session every run" to change the agent`)
     }
     try {
-      // A webhook / delivered fire queues behind a running turn, whose folder
+      // A fire that finds a turn running queues behind it — a webhook /
+      // delivered one, or an awaited one whose session a turn took during the
+      // folder check (the re-check below delivers it) — and that turn's folder
       // can't change mid-turn (setWorkingDir throws): it applies on a later run.
       if (existing) {
-        if (!((webhook || deliver) && host.hasActiveWorkInTree(sessionId))) host.setWorkingDir(sessionId, folderAbs)
+        if (!host.hasActiveWorkInTree(sessionId)) host.setWorkingDir(sessionId, folderAbs)
       }
       // A webhook job's session is titled up front: its first message is an
       // event payload, a poor title.
