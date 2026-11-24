@@ -211,7 +211,10 @@ export class SessionAgentBuilder {
         // extension env: shellContext is never resolved for other levels.
         return notifyEnv ? { ...context, env: { ...context.env, [NOTIFY_WORKSPACE_ENV]: this.host.workspaceRoot, [NOTIFY_SESSION_ENV]: sessionId } } : context
       },
-      notifyHint: notifyEnv,
+      // Not on Windows: the desktop bundle's `halo` isn't on PATH and shell_exec
+      // runs cmd, so the nohup recipe can't run there (env still set). The
+      // real fix belongs in halo notify's Windows support.
+      notifyHint: notifyEnv && process.platform !== 'win32',
     })
     // A2A read-only: the side-effect-free set regardless of sandbox backend
     // (a bwrap-contained shell_exec is still a side effect the caller didn't earn).

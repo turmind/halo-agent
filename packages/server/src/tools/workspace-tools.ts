@@ -769,12 +769,26 @@ export function createWorkspaceTools(
       'that produce a lot of output, redirect to a file (`<command> > .halo/tmp/out.log`) and',
       'use `grep` / `file_read` with `offset`+`limit` to inspect what you need.',
       '',
-      `Commands are killed after ${config.timeout.shellExec / 1000}s. For anything that may run`,
-      'longer (big builds, long test suites, deploys), start it in the background',
-      'and return immediately — e.g. `nohup <command> > .halo/tmp/xxx.log 2>&1 &` —',
-      'then poll the log file or process status with follow-up shell_exec calls',
-      'instead of letting a single call sit past the timeout.',
-      ...(opts.notifyHint ? ['', 'A script can run `halo notify "…"` to wake this session later ($HALO_SESSION_ID is set).'] : []),
+      // With `halo notify` set up (opts.notifyHint) a background job reports
+      // back on its own: the agent ends its turn instead of polling, which
+      // holds the session busy. The outer `>/dev/null 2>&1` is load-bearing:
+      // a backgrounded job still holding this call's stdout / stderr pipes
+      // keeps it open (sandbox exec waits for `close`) until the job exits.
+      ...(opts.notifyHint ? [
+        `Commands are killed after ${config.timeout.shellExec / 1000}s. For anything that may run longer (big builds,`,
+        'long test suites, deploys, uploads), run it in the background with a',
+        '`halo notify` at the end, then end your turn — don\'t wait in a sleep loop:',
+        '  nohup sh -c \'<command> > .halo/tmp/<name>.log 2>&1; halo notify "<name> done: exit=$?"\' >/dev/null 2>&1 &',
+        'The outer `>/dev/null 2>&1` matters: without it this call waits for the job.',
+        'The `[Script notice]` it sends starts your next turn; read the log then.',
+        '($HALO_SESSION_ID / $HALO_WORKSPACE are already set — no flags needed.)',
+      ] : [
+        `Commands are killed after ${config.timeout.shellExec / 1000}s. For anything that may run`,
+        'longer (big builds, long test suites, deploys), start it in the background',
+        'and return immediately — e.g. `nohup <command> > .halo/tmp/xxx.log 2>&1 &` —',
+        'then poll the log file or process status with follow-up shell_exec calls',
+        'instead of letting a single call sit past the timeout.',
+      ]),
     ].join('\n'),
     inputSchema: {
       type: 'object' as const,

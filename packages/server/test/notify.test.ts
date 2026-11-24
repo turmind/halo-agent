@@ -11,6 +11,7 @@ import { createEvoDb, setEvoDb, evolutionRuns, type EvoDb } from '../src/db/evo-
 import { agentSessions } from '../src/db/schema.js'
 import { getSandboxBackend, initBwrapCheck } from '../src/tools/sandbox.js'
 import { createWorkspaceTools } from '../src/tools/workspace-tools.js'
+import { config } from '../src/config.js'
 import type { ToolDef } from '../src/agents/runtime/types.js'
 import { installCronHarness, teardownCronHarness, until, type CronHarness } from './helpers/cron-harness.js'
 
@@ -186,27 +187,77 @@ describe('shell_exec env + hint', () => {
   const shellOf = (sessionId: string, accessLevel: 'readonly' | 'workspace' | null) =>
     builder().resolveBaseToolSet({ agentId: 'default', sessionId, modelId: 'test-model', accessLevel, yamlConfig: { tools: ['shell_exec'] } }).workspaceTools.find((t) => t.name === 'shell_exec')!
   const PRINT = 'printf "%s|%s" "${HALO_SESSION_ID-unset}" "${HALO_WORKSPACE-unset}"'
+  // Run from inside a Halo session's shell, vitest inherits that session's
+  // target; HALO_WORKSPACE is not stripped from children (AgentCore needs it).
+  const inherited = { HALO_WORKSPACE: process.env.HALO_WORKSPACE, HALO_SESSION_ID: process.env.HALO_SESSION_ID }
+  beforeEach(() => { delete process.env.HALO_WORKSPACE; delete process.env.HALO_SESSION_ID })
+  afterEach(() => { for (const [k, v] of Object.entries(inherited)) if (v !== undefined) process.env[k] = v })
+  // The background paragraph without notify: poll with follow-up calls.
+  const POLL = 'then poll the log file or process status with follow-up shell_exec calls'
+  const expectNotifyRecipe = (description: string) => {
+    expect(description).toContain('halo notify')
+    expect(description).toContain("don't wait in a sleep loop")
+    expect(description).toContain('>/dev/null 2>&1 &')
+    expect(description).not.toContain('poll')
+  }
+  const expectPollRecipe = (description: string) => {
+    expect(description).toContain(POLL)
+    expect(description).not.toContain('halo notify')
+  }
 
-  it('a full sub-session: HALO_SESSION_ID (full path) + HALO_WORKSPACE, and the hint', async () => {
+  it('a full sub-session: HALO_SESSION_ID (full path) + HALO_WORKSPACE, and the notify recipe instead of polling', async () => {
     const shell = shellOf('p1>c1', null)
-    expect(shell.description).toContain('halo notify')
+    expectNotifyRecipe(shell.description)
     expect(await shell.callback({ command: PRINT })).toBe(`p1>c1|${ws}`)
   })
 
-  it.skipIf(!bwrap)('a workspace-level session: neither, no hint', async () => {
+  it('the recipe as written returns at once, and its notify runs when the job ends', async () => {
+    // A stub `halo` records what the recipe's notify would send.
+    fs.mkdirSync(path.join(ws, '.halo', 'tmp'), { recursive: true })
+    const bin = fs.mkdtempSync(path.join(tmpHome, 'bin-'))
+    const out = path.join(tmpHome, 'notified')
+    fs.writeFileSync(path.join(bin, 'halo'), `#!/bin/sh\nprintf '%s|%s|%s' "$HALO_SESSION_ID" "$1" "$2" > ${out}\n`, { mode: 0o755 })
+    const realPath = process.env.PATH
+    process.env.PATH = `${bin}:${realPath}`
+    try {
+      const shell = shellOf('s1', null)
+      const recipe = shell.description.split('\n').find((l) => l.trimStart().startsWith('nohup '))!.trim()
+      const started = Date.now()
+      await shell.callback({ command: recipe.replace('<command>', 'sleep 2').replaceAll('<name>', 'job') })
+      // Not held open by the background job's pipes.
+      expect(Date.now() - started).toBeLessThan(1500)
+      await until(() => fs.existsSync(out), 6000)
+      expect(fs.readFileSync(out, 'utf-8')).toBe('s1|notify|job done: exit=0')
+    } finally {
+      process.env.PATH = realPath
+    }
+  })
+
+  it.skipIf(!bwrap)('a workspace-level session: neither, the poll recipe', async () => {
     const shell = shellOf('s1', 'workspace')
-    expect(shell.description).not.toContain('halo notify')
+    expectPollRecipe(shell.description)
     expect(await shell.callback({ command: PRINT })).toBe('unset|unset')
   })
 
-  it('no token (CLI / TUI / AgentCore): neither, no hint', async () => {
+  it('no token (CLI / TUI / AgentCore): neither, the poll recipe', async () => {
     _setLocalNotifyToken(null)
     const shell = shellOf('s1', null)
-    expect(shell.description).not.toContain('halo notify')
+    expectPollRecipe(shell.description)
     expect(await shell.callback({ command: PRINT })).toBe('unset|unset')
   })
 
-  it('createWorkspaceTools without notifyHint (preview / CLI callers): no hint', () => {
-    expect(createWorkspaceTools(ws).find((t) => t.name === 'shell_exec')!.description).not.toContain('halo notify')
+  it('createWorkspaceTools without notifyHint (preview / CLI callers): the poll paragraph, unchanged', () => {
+    expect(createWorkspaceTools(ws).find((t) => t.name === 'shell_exec')!.description).toContain([
+      `Commands are killed after ${config.timeout.shellExec / 1000}s. For anything that may run`,
+      'longer (big builds, long test suites, deploys), start it in the background',
+      'and return immediately — e.g. `nohup <command> > .halo/tmp/xxx.log 2>&1 &` —',
+      'then poll the log file or process status with follow-up shell_exec calls',
+      'instead of letting a single call sit past the timeout.',
+    ].join('\n'))
+    expectPollRecipe(createWorkspaceTools(ws).find((t) => t.name === 'shell_exec')!.description)
+  })
+
+  it.runIf(process.platform === 'win32')('Windows: env set, but no notify recipe (the nohup line cannot run under cmd)', () => {
+    expectPollRecipe(shellOf('s1', null).description)
   })
 })
