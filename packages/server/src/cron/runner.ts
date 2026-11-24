@@ -1186,9 +1186,17 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
   // Run-now carries no webhook events: a webhook job without a prompt would
   // open an empty turn.
   if (triggerKind === 'manual' && !job.userPrompt) return skip('nothing to run: the job has no prompt, and run-now carries no webhook events')
-  if (_inflight.has(jobId)) return skip('previous run still in progress')
+  // The job's own awaited run is still waiting for its reply (tracked; not
+  // finishing, not a legacy orphan): a timer / run-now fire is delivered into
+  // its session instead of skipped — a one-shot that re-armed itself mid-run
+  // would otherwise lose that fire. It leaves the job guard to that run (never
+  // takes nor releases `_inflight`) and its reply to that run. A stateless
+  // job's next fire has its own session (still serialized); a webhook job's
+  // events are injected into the run (startOrInject), its run-now still skipped.
+  const ownAwaited = !job.stateless && !job.webhookSecret && [..._runs.values()].some((r) => r.jobId === jobId)
+  if (_inflight.has(jobId) && !ownAwaited) return skip('previous run still in progress')
   if (_inflightSessions.has(sessionKeyFor(job.workspacePath, sessionId))) return skip(`session ${sessionId} busy: another cron run is in progress`)
-  _inflight.add(jobId)
+  if (!ownAwaited) _inflight.add(jobId)
   let tracked = false
   try {
     // Session-level guards → the fire's mode. A timer / run-now fire waits for
@@ -1217,7 +1225,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       // One-way: the re-check past the awaits below only flips an awaited
       // fire to delivered, never back — a job with targets found busy here
       // stays delivered (not pushed) even if the session is free by then.
-      deliver = !webhook && !job.stateless && (!hasTargets || !!busy)
+      deliver = ownAwaited || (!webhook && !job.stateless && (!hasTargets || !!busy))
       // A stateless session is fresh, never shared: not reached in practice.
       if (busy && !deliver) return skip(busy)
     }
@@ -1362,7 +1370,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
     return runId
   } finally {
     // A tracked run releases the job when it ends (finishRun / timeout / cancel).
-    if (!tracked) _inflight.delete(jobId)
+    if (!tracked && !ownAwaited) _inflight.delete(jobId)
   }
 }
 

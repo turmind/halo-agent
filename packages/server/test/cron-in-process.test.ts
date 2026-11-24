@@ -250,16 +250,61 @@ describe('in-process cron run — happy path', () => {
 })
 
 describe('in-process cron run — guards', () => {
-  it('same job mid-run → skipped "previous run still in progress"', async () => {
+  it('same job mid-run (its awaited run waiting for the reply) → delivered into that run\'s turn; the reply and the job guard stay that run\'s', async () => {
     let open!: () => void
-    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    h.turns.push({ reply: 'first reply', gate: new Promise<void>((r) => { open = r }) }, { reply: 'merged reply' })
     insertJob('cron-o')
     const first = await runJob('cron-o', 'manual')
+    await until(() => h.inputs.length === 1)
     const second = getRun(await runJob('cron-o', 'scheduled'))
+    expect(second).toMatchObject({ status: 'succeeded', failureReason: null, dispatchResults: '[]', output: `delivered into session cron-o (queued into its running turn; not awaited; reply goes to cron run ${first})` })
+    // Not tracked, the guard not released: still the first run's.
+    expect([..._runs.values()].map((r) => r.runId)).toEqual([first])
+    expect(_inflight.has('cron-o')).toBe(true)
+    expect(readReplyTo(h.sm.getDb(), 'cron-o')).toEqual({ cron: first })
+    open()
+    await settled(first)
+    expect(h.inputs[1]).toContain('daily report')
+    expect(getRun(first)).toMatchObject({ status: 'succeeded', output: 'merged reply' })
+    expect(sent).toEqual([{ accountId: 'acc1', text: 'merged reply' }])
+    expect(_inflight.has('cron-o')).toBe(false)
+  })
+
+  it.each([['stateless', { stateless: 1 }], ['webhook', { schedule: '', webhookSecret: 'hook-secret' }]] as const)('a %s job mid-run → still skipped "previous run still in progress"', async (_kind, fields) => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    insertJob('cron-sl', fields)
+    const first = await runJob('cron-sl', 'manual')
+    await until(() => h.inputs.length === 1)
+    const second = getRun(await runJob('cron-sl', 'manual'))
     expect(second).toMatchObject({ status: 'skipped', failureReason: 'previous run still in progress', logPath: null })
     open()
     await settled(first)
     expect(getRun(first).status).toBe('succeeded')
+  })
+
+  it('a pushed one-shot that re-arms itself while awaited: the fire at the new runAt is delivered into the same turn, the job stays enabled', async () => {
+    let open!: () => void
+    h.turns.push({ reply: 'wrap-up', gate: new Promise<void>((r) => { open = r }) })
+    insertJob('cron-rearm', { schedule: '', runAt: Date.now() })
+    const first = await runJob('cron-rearm', 'scheduled')
+    await until(() => h.inputs.length === 1)
+    // The turn moves its own job's runAt a little ahead (manage-cron.py update --run-at).
+    db.update(cronJobs).set({ runAt: Date.now() + 300 }).where(eq(cronJobs.id, 'cron-rearm')).run()
+    scheduleJob('cron-rearm')
+    await until(() => db.select().from(cronRuns).all().length === 2)
+    const fired = db.select().from(cronRuns).all().find((r) => r.id !== first)!
+    expect(fired).toMatchObject({ triggerKind: 'scheduled', status: 'succeeded', output: `delivered into session cron-rearm (queued into its running turn; not awaited; reply goes to cron run ${first})` })
+    // That fire was the one-shot's own: its finalize disabled the job.
+    expect(getJob('cron-rearm').enabled).toBe(0)
+    // The merged turn re-arms once more before wrapping up — as the REST PUT
+    // does it (a future runAt re-enables the job).
+    db.update(cronJobs).set({ runAt: Date.now() + 60_000, enabled: 1 }).where(eq(cronJobs.id, 'cron-rearm')).run()
+    open()
+    await settled(first)
+    expect(getRun(first).status).toBe('succeeded')
+    expect(sent.map((m) => m.text)).toEqual([expect.any(String)])
+    expect(getJob('cron-rearm').enabled).toBe(1)
   })
 
   it('targets, session owed to someone else (relay / A2A) → delivered: no push, the owner\'s pointer untouched', async () => {

@@ -83,7 +83,9 @@ today" or "send the report next Monday morning". On `update`, passing one
 of the two switches the job's mode and clears the other; never pass both.
 `update <id> --run-at <future>` re-arms a one-shot and re-enables it, so a
 run can schedule its own next fire (a relay every N minutes) — no separate
-`enable` needed.
+`enable` needed. If that next fire comes while the run that set it is still
+waiting for its reply, the prompt is delivered into that same turn (not
+skipped), and the reply is pushed once, by the run still waiting.
 
 | Spoken                            | Flag                                      |
 |-----------------------------------|-------------------------------------------|
