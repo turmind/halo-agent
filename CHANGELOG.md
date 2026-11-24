@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-11-24
+
+- shell_exec: when `halo notify` is available, its description teaches a background recipe (`nohup sh -c '<cmd> > log; halo notify "done: $?"' >/dev/null 2>&1 &`) for jobs whose end matters, instead of polling with follow-up calls (polling kept the session busy). Not shown on Windows yet.
+- `halo notify` now works from workspace / readonly sessions too: their shell gets a self-only credential (`HALO_NOTIFY_URL` / `HALO_NOTIFY_TOKEN`) that can wake only that session; full sessions still use the boot token file.
+- Sandbox: a command ending in `&` in a workspace / readonly shell no longer holds the call open until the background job finishes.
+
 ## [2.4.1] - 2026-11-24
 
 - Cron: a fire with no push targets, or one that finds its session busy, is delivered into the session and the run ends — no waiting, no timeout, no stop; the reply goes to whoever owns the turn. Only a fire with targets on a free session still waits and pushes. Delivered turns skip pre-compact evo.
@@ -1348,7 +1354,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.4.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.4.2...HEAD
+[2.4.2]: https://github.com/turmind/halo-agent/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/turmind/halo-agent/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/turmind/halo-agent/compare/v2.3.6...v2.4.0
 [2.3.6]: https://github.com/turmind/halo-agent/compare/v2.3.5...v2.3.6
