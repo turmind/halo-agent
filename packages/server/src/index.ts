@@ -55,6 +55,8 @@ import { FRONT_URL_ENV, postToFront } from './a2a/agentcore-notify.js'
 import { startCronDaemon, stopCronDaemon, setCronSessionRegistry } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createCronHookRoutes } from './routes/cron-hooks.js'
+import { createNotifyRoutes } from './routes/notify.js'
+import { initLocalNotify, writeNotifyTokenFile } from './local-notify.js'
 import { createExtensionRoutes } from './routes/extensions.js'
 import { createUpdateRoutes } from './routes/updates.js'
 import { start as startExtensionsWatcher, stop as stopExtensionsWatcher } from './extensions/watcher.js'
@@ -488,6 +490,10 @@ setEvoSessionRegistry(registry)
 // sweep entirely — their ledger is off, so they write no rows to drain.
 // AgentCore A2A mode opens its workspace only once the lease is held, and
 // that SessionManager's constructor drains the rows itself.
+// `halo notify`'s per-boot token, minted before the sweep below can build a
+// session: full sessions' shell_exec env and hint key off it. Not in AgentCore.
+if (!AGENTCORE) initLocalNotify()
+
 if (OWNS_RUNTIMES && !AGENTCORE) {
   for (const ws of listRunningWorkspaces()) {
     if (!fs.existsSync(path.join(ws, '.halo'))) continue
@@ -530,6 +536,10 @@ if (!AGENTCORE) {
   // Cron webhook receiver /cron-hooks/:jobId: outside /api/* (the job's
   // secret is its auth, no admin cookie), before serveStatic / the SPA fallback.
   app.route('/', createCronHookRoutes())
+
+  // `halo notify` (POST /api/notify): loopback + the per-boot token file, no
+  // admin cookie (PUBLIC_PATHS). Token minted above the boot sweep.
+  app.route('/api', createNotifyRoutes({ registry }))
 
   // Cron daemon runs after channels boot so every cron dispatcher is
   // registered before the first scheduled fire could happen.
@@ -663,6 +673,8 @@ const server = serve({
     // public/reverse-proxy URL or configured port (which may have been zero).
     const host = info.family === 'IPv6' ? '[::1]' : '127.0.0.1'
     extensionSessionAccess.start({ baseUrl: `http://${host}:${info.port}` })
+    try { writeNotifyTokenFile(`http://${host}:${info.port}`) }
+    catch (err) { console.error(`[Notify] could not write the token file: ${err instanceof Error ? err.message : String(err)}`) }
   }
   if (AGENTCORE_WORKER) void postToFront('/ready', {})
   // Always shown (stderr, whatever the log level): without it a foreground

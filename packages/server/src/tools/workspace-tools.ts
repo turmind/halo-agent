@@ -338,6 +338,8 @@ export interface WorkspaceToolsOptions {
   supportsVision?: boolean
   /** Resolved only for an actual full-access shell invocation, never schemas. */
   shellContext?: () => Promise<{ env: Record<string, string>; secrets: string[] }>
+  /** shellContext sets `$HALO_SESSION_ID` / `$HALO_WORKSPACE` (`halo notify`): say so in shell_exec's description. */
+  notifyHint?: boolean
 }
 
 export function createWorkspaceTools(
@@ -772,6 +774,7 @@ export function createWorkspaceTools(
       'and return immediately — e.g. `nohup <command> > .halo/tmp/xxx.log 2>&1 &` —',
       'then poll the log file or process status with follow-up shell_exec calls',
       'instead of letting a single call sit past the timeout.',
+      ...(opts.notifyHint ? ['', 'A script can run `halo notify "…"` to wake this session later ($HALO_SESSION_ID is set).'] : []),
     ].join('\n'),
     inputSchema: {
       type: 'object' as const,

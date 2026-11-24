@@ -248,6 +248,7 @@ export interface CronSessionHost {
   setWorkingDir(sessionId: string, workingDir: string | null): unknown
   appendUserMessage(sessionId: string, text: string): string
   sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string, noEvo?: boolean): Promise<'running' | 'queued'>
+  deliverMessage(sessionId: string, ui: string, model: string): Promise<'running' | 'queued'>
   stopSession(sessionId: string): Promise<void>
   registerEventListener(rootSessionId: string, handler: (event: AgentSessionEvent) => void): () => void
   /** Whether the model history holds the user message stamped `stamp`. */
@@ -1323,13 +1324,20 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       // invisible to it, prompts typed into the admin form don't carry one).
       // A webhook job's prompt may be empty: the events alone open the turn.
       const texts = events.map((ev) => eventText(ev, job.workspacePath, false))
-      const stamp = host.appendUserMessage(sessionId, [job.userPrompt, ...texts.map((t) => t.ui)].filter(Boolean).join('\n\n'))
-      stampEvents(events.map((ev) => ev.id), stamp)
-      // accessLevel undefined: the session keeps its own level. noEvo: the
-      // turn this prompt opens or merges into skips pre-compact evo — what
-      // keeps a delivered fire's turn out of it (an awaited run's turns are
-      // also out through its `{cron}` pointer).
-      sendState = await host.sendUserMessage(sessionId, [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].filter(Boolean).join('\n\n'), undefined, undefined, stamp, true)
+      const ui = [job.userPrompt, ...texts.map((t) => t.ui)].filter(Boolean).join('\n\n')
+      const model = [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].filter(Boolean).join('\n\n')
+      if (deliver) {
+        // The shared "put it in, don't wait" primitive (halo notify uses it
+        // too): no pointer, turn marked noEvo. Never a webhook fire: no events.
+        sendState = await host.deliverMessage(sessionId, ui, model)
+      } else {
+        const stamp = host.appendUserMessage(sessionId, ui)
+        stampEvents(events.map((ev) => ev.id), stamp)
+        // accessLevel undefined: the session keeps its own level. noEvo: an
+        // awaited run's turns are also out of pre-compact evo through its
+        // `{cron}` pointer; the mark covers a user message it shares a turn with.
+        sendState = await host.sendUserMessage(sessionId, model, undefined, undefined, stamp, true)
+      }
     } catch (err) {
       if (tracked) {
         untrackRun(runId)

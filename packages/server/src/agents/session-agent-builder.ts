@@ -18,6 +18,8 @@ import { buildA2ATools } from '../a2a/outbound.js'
 import { buildNodeTools } from '../nodes/tools.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
 import { extensionSessionAccess } from '../extensions/session-access.js'
+import { localNotifyToken } from '../local-notify.js'
+import { NOTIFY_SESSION_ENV, NOTIFY_WORKSPACE_ENV } from '@turmind/halo-core/protocol'
 
 /** The A2A channel's session-id stem (`a2a_<accountId>_…`, routes.ts). */
 const A2A_SESSION_STEM = sessionPrefix('a2a', '').slice(0, -1)
@@ -196,11 +198,20 @@ export class SessionAgentBuilder {
     const allowedNamespaces = new Set<string>([agentId, ...declaredSkills])
 
     const imageOverride = (yamlConfig?.model as Record<string, unknown> | undefined)?.image as boolean | undefined
+    // No token outside a full server boot (CLI/TUI loop, AgentCore): no env, no hint.
+    const notifyEnv = (accessLevel ?? 'full') === 'full' && localNotifyToken() !== null
     const allTools = createWorkspaceTools(this.host.workspaceRoot, {
       accessLevel: accessLevel ?? 'full',
       allowedNamespaces,
       supportsVision: modelSupportsImage(modelId, imageOverride),
-      shellContext: () => extensionSessionAccess.shellContext(this.host.workspaceRoot, sessionId),
+      shellContext: async () => {
+        const context = await extensionSessionAccess.shellContext(this.host.workspaceRoot, sessionId)
+        // `halo notify` with no flags targets this session (the full
+        // `root>sub` id for a sub-session). Full access only, like the
+        // extension env: shellContext is never resolved for other levels.
+        return notifyEnv ? { ...context, env: { ...context.env, [NOTIFY_WORKSPACE_ENV]: this.host.workspaceRoot, [NOTIFY_SESSION_ENV]: sessionId } } : context
+      },
+      notifyHint: notifyEnv,
     })
     // A2A read-only: the side-effect-free set regardless of sandbox backend
     // (a bwrap-contained shell_exec is still a side effect the caller didn't earn).

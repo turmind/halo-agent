@@ -10,6 +10,7 @@ import {
   USER_UNIT, ctlCommand, describeUnit, installUserUnit, isOwnUserUnit, planServerStart, serverUnitOf,
   unitCtl, unitEnabled, type OwnedUnit, type ServerUnit,
 } from './server-systemd.js'
+import { HELP_NOTIFY, cmdNotify } from './notify.js'
 
 // harness.js / cli.js / tui.js statically import the whole @turmind/halo-server
 // world (SessionManager, db, sandbox, file-watching, logger). Keeping them as
@@ -37,6 +38,7 @@ Commands:
   sessions             List recent sessions (or \`migrate v1 v2\` the 1.x files)
   models               Install / list hub model provider configs
   acp                  Bridge a halo server to an ACP client (stdio)
+  notify "<text>"      Wake a session of the running server from a script
   --help, -h           Show this help
   --version            Show version
 
@@ -321,6 +323,7 @@ const HELP_BY_CMD: Record<string, string> = {
   sessions: HELP_SESSIONS,
   acp: HELP_ACP,
   models: HELP_MODELS,
+  notify: HELP_NOTIFY,
 }
 
 /** Parse common harness-related flags shared by tui / cli / agents / sessions. */
@@ -1596,6 +1599,12 @@ async function main(): Promise<void> {
   // talks to a remote halo server over HTTP. Skip the local setup gate.
   if (cmd === 'acp') {
     await cmdAcp(subArgs)
+    return
+  }
+
+  // Talks to the running server over loopback; reads only its token file.
+  if (cmd === 'notify') {
+    process.exitCode = await cmdNotify(subArgs)
     return
   }
 

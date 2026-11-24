@@ -2895,6 +2895,30 @@ export class SessionManager implements SessionManagerInternals {
     return 'running'
   }
 
+  /**
+   * Deliver a message no person typed into a session, without waiting for its
+   * reply — the shared primitive of a delivered cron fire and `halo notify`.
+   * The UI row (`ui`) and the model text (`model`) share one stamp; idle → a
+   * new turn, busy / compacting → queued with a soft interrupt (merges into
+   * the running turn). It takes no reply_to: the turn's reply goes to whoever
+   * owns the session now (relay / A2A / an awaited cron run), else stays in
+   * it. The turn skips pre-compact evo (noEvo). A sub-session is woken like a
+   * query_session target: stoppedAt cleared, and its turn end auto-reports to
+   * its parent (tryReportToParent).
+   */
+  async deliverMessage(sessionId: string, ui: string, model: string): Promise<'running' | 'queued'> {
+    let stamp: string
+    if (sessionId.includes('>')) {
+      // A sub-session's row goes to its own log (taskId), as querySession's.
+      stamp = nextTurnStamp()
+      this.emitEvent(sessionId, { type: 'user', text: ui, agentName: 'user', report: true, taskId: sessionId, stamp })
+    } else {
+      stamp = this.appendUserMessage(sessionId, ui)
+    }
+    // sendUserMessage clears stoppedAt (root or sub alike).
+    return this.sendUserMessage(sessionId, model, undefined, undefined, stamp, true)
+  }
+
   /** A drained batch as one turn's input: one block group per message — its
    *  images, then a text block `[<stamp>] <text>` (an agent message with its
    *  `(from: session X)` prefix after the stamp) — so each UI row's raw copy

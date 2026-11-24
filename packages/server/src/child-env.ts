@@ -6,7 +6,7 @@
  * outbound proxy vars while that setting is on.
  */
 import { outboundProxy, type OutboundProxy } from './outbound-proxy.js'
-import { EXTENSION_BACKENDS_ENV, EXTENSION_NODE_ENV } from '@turmind/halo-core/protocol'
+import { EXTENSION_BACKENDS_ENV, EXTENSION_NODE_ENV, NOTIFY_SESSION_ENV } from '@turmind/halo-core/protocol'
 
 /** OTEL_* keys observability/otel.ts set from settings (unset before it ran).
  *  Stripped from children: inherited from boot they'd win the child's own
@@ -28,6 +28,10 @@ export function cleanChildEnv(proxyEnv: Record<string, string> = outboundProxyEn
   delete env.HALO_NODE_TOKEN
   delete env[EXTENSION_BACKENDS_ENV]
   delete env[EXTENSION_NODE_ENV]
+  // `halo notify`'s target is set per shell_exec (full sessions); one this
+  // process inherited (a server started from a session's shell) would point
+  // terminals and non-full commands at that unrelated session.
+  delete env[NOTIFY_SESSION_ENV]
   for (const key of settingsOtelEnvKeys) delete env[key]
   return Object.assign(env, proxyEnv)
 }
