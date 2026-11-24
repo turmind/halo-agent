@@ -42,6 +42,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   ├── config.yaml                    # System config (admin password, server settings)
 │   ├── a2a-remotes.yaml               # A2A remote list (server-wide, full-only; see design/a2a.md)
 │   ├── server.env                     # Env snapshot for the systemd user unit (600), rewritten by `halo server start -d` / `restart`
+│   ├── notify.json                    # `{url, token}` for `halo notify` (600), rewritten at every server boot (dev/api.md#local-notify-halo-notify)
 │   └── channels/
 │       └── channels.db                # Channel accounts DB
 

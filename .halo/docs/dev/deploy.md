@@ -324,6 +324,7 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 | `halo tui` | Interactive TUI client |
 | `halo cli "<prompt>"` | One-shot prompt → reply, exit |
 | `halo agents` / `halo sessions` | List agents / sessions |
+| `halo notify [-w <ws>] [-s <id>] "<text>"` | Wake a session of the running server from a local script — see [guide/cli.md](../guide/cli.md#wake-a-session-from-a-script-halo-notify) |
 | `halo acp` | Stdio bridge that lets an ACP client (e.g. Zed / JetBrains) drive a halo server — see [acp-adapter.md](acp-adapter.md) |
 | `halo agentcore --workspace <path>` | Foreground A2A server for an Amazon Bedrock AgentCore Runtime container — see [design/agentcore.md](../design/agentcore.md) |
 
