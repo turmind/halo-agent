@@ -24,7 +24,7 @@ import { sqliteTable, text, integer, primaryKey } from 'drizzle-orm/sqlite-core'
 import { and, eq } from 'drizzle-orm'
 import path from 'node:path'
 import fs from 'node:fs'
-import { runMigrations } from './migrate.js'
+import { runMigrations, addColumnIfMissing, type Migration } from './migrate.js'
 import { applyCommitDurability } from './durability.js'
 
 export const runningSessions = sqliteTable('running_sessions', {
@@ -33,6 +33,9 @@ export const runningSessions = sqliteTable('running_sessions', {
   /** Root or sub-session id — grouped to its root (`id.split('>')[0]`) at sweep time. */
   sessionId: text('session_id').notNull(),
   startedAt: integer('started_at').notNull(),
+  /** 1 while the run's current turn carries a cron-fired message: the turn the
+   *  boot sweep resumes keeps skipping pre-compact evo (SessionManager.setTurnNoEvo). */
+  noEvo: integer('no_evo').notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.workspace, t.sessionId] })])
 
 const CREATE_SQL = `
@@ -40,9 +43,15 @@ CREATE TABLE IF NOT EXISTS running_sessions (
   workspace  TEXT NOT NULL,
   session_id TEXT NOT NULL,
   started_at INTEGER NOT NULL,
+  no_evo     INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (workspace, session_id)
 );
 `
+
+export const RUNS_MIGRATIONS: Migration[] = [
+  // v1: `no_evo` — the in-flight turn skips pre-compact evo.
+  (s) => addColumnIfMissing(s, 'running_sessions', 'no_evo', 'INTEGER NOT NULL DEFAULT 0'),
+]
 
 export function createRunsDb(globalDir: string) {
   fs.mkdirSync(globalDir, { recursive: true })
@@ -51,8 +60,8 @@ export function createRunsDb(globalDir: string) {
   sqlite.pragma('journal_mode = WAL')
   applyCommitDurability(sqlite, globalDir)
   sqlite.exec(CREATE_SQL)
-  // No migrations yet — append here; CREATE_SQL must always describe the full current shape.
-  runMigrations(sqlite, [])
+  // Append only; CREATE_SQL must always describe the full current shape.
+  runMigrations(sqlite, RUNS_MIGRATIONS)
   return drizzle(sqlite, { schema: { runningSessions } })
 }
 
@@ -66,11 +75,12 @@ export function getRunsDb(): RunsDb {
 }
 
 /** runSession entry. Idempotent: a re-entry for an id already recorded
- *  (a leftover row from an earlier generation being resumed) is a no-op. */
+ *  (a leftover row from an earlier generation being resumed) keeps its
+ *  started_at; its `no_evo` restarts at 0 like the new run's turn mark. */
 export function insertRunning(workspace: string, sessionId: string): void {
   getRunsDb().insert(runningSessions)
     .values({ workspace, sessionId, startedAt: Date.now() })
-    .onConflictDoNothing()
+    .onConflictDoUpdate({ target: [runningSessions.workspace, runningSessions.sessionId], set: { noEvo: 0 } })
     .run()
 }
 
@@ -81,16 +91,24 @@ export function deleteRunning(workspace: string, sessionId: string): void {
     .run()
 }
 
-/** Read AND delete one workspace's leftover rows in a single transaction;
- *  returns the session ids. Rows of other workspaces are untouched. */
-export function drainRunning(workspace: string): string[] {
+/** Per turn start, only when the value changes (the row is inserted with 0). */
+export function setRunningNoEvo(workspace: string, sessionId: string, noEvo: boolean): void {
+  getRunsDb().update(runningSessions)
+    .set({ noEvo: noEvo ? 1 : 0 })
+    .where(and(eq(runningSessions.workspace, workspace), eq(runningSessions.sessionId, sessionId)))
+    .run()
+}
+
+/** Read AND delete one workspace's leftover rows in a single transaction.
+ *  Rows of other workspaces are untouched. */
+export function drainRunning(workspace: string): Array<{ sessionId: string; noEvo: boolean }> {
   return getRunsDb().transaction((tx) => {
-    const rows = tx.select({ sessionId: runningSessions.sessionId })
+    const rows = tx.select({ sessionId: runningSessions.sessionId, noEvo: runningSessions.noEvo })
       .from(runningSessions)
       .where(eq(runningSessions.workspace, workspace))
       .all()
     tx.delete(runningSessions).where(eq(runningSessions.workspace, workspace)).run()
-    return rows.map((r) => r.sessionId)
+    return rows.map((r) => ({ sessionId: r.sessionId, noEvo: r.noEvo === 1 }))
   })
 }
 

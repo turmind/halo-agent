@@ -247,7 +247,7 @@ export interface CronSessionHost {
   createSession(agentId: string, parentId: null, description: string, agentName?: string, explicitId?: string, workingDir?: string | null, accessLevel?: 'readonly' | 'workspace' | null, title?: string): Promise<string>
   setWorkingDir(sessionId: string, workingDir: string | null): unknown
   appendUserMessage(sessionId: string, text: string): string
-  sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string): Promise<'running' | 'queued'>
+  sendUserMessage(sessionId: string, message: string, images?: undefined, accessLevel?: undefined, stamp?: string, noEvo?: boolean): Promise<'running' | 'queued'>
   stopSession(sessionId: string): Promise<void>
   registerEventListener(rootSessionId: string, handler: (event: AgentSessionEvent) => void): () => void
   /** Whether the model history holds the user message stamped `stamp`. */
@@ -1320,8 +1320,11 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       const texts = events.map((ev) => eventText(ev, job.workspacePath, false))
       const stamp = host.appendUserMessage(sessionId, [job.userPrompt, ...texts.map((t) => t.ui)].filter(Boolean).join('\n\n'))
       stampEvents(events.map((ev) => ev.id), stamp)
-      // accessLevel undefined: the session keeps its own level.
-      sendState = await host.sendUserMessage(sessionId, [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].filter(Boolean).join('\n\n'), undefined, undefined, stamp)
+      // accessLevel undefined: the session keeps its own level. noEvo: the
+      // turn this prompt opens or merges into skips pre-compact evo — what
+      // keeps a delivered fire's turn out of it (an awaited run's turns are
+      // also out through its `{cron}` pointer).
+      sendState = await host.sendUserMessage(sessionId, [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].filter(Boolean).join('\n\n'), undefined, undefined, stamp, true)
     } catch (err) {
       if (tracked) {
         untrackRun(runId)

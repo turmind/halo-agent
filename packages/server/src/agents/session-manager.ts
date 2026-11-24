@@ -29,7 +29,7 @@ import { GOAL_AGENT_ID, deliverGoalRound, sweepActiveGoals, buildGoalTools, diss
 import { deliverRelayReport, deliverRelayInterim, readReplyTo, listActiveChildren, buildRelayTools, RELAY_CHANNEL_PREFIX, A2A_CHANNEL_PREFIX, cancelOwedForSession } from './relay.js'
 import { sweepInterruptedRuns } from './run-ledger.js'
 import { resolveWorkingDir as resolveWorkingDirIn } from './working-dir.js'
-import { insertRunning, deleteRunning } from '../db/runs-db.js'
+import { insertRunning, deleteRunning, setRunningNoEvo } from '../db/runs-db.js'
 import { isShuttingDown } from '../shutdown.js'
 import { extensionSessionAccess } from '../extensions/session-access.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
@@ -204,6 +204,9 @@ interface QueuedMessage {
   /** Arrival stamp (ISO) — the turn key its UI row carries (SessionMessage.stamp).
    *  Absent: stamped when the message reaches the model. */
   stamp?: string
+  /** A message no person sent (a cron fire's prompt): the turn it rides skips
+   *  the pre-compact evo hook — see AgentSession.noEvoTurn. */
+  noEvo?: boolean
 }
 
 /** The latest turn of one runSession run, refreshed before every turn (opening +
@@ -301,6 +304,13 @@ interface AgentSession {
    *  once. Manual `/compact` enqueues directly (no surrounding turn).
    *  THIS FLAG IS PER-SESSION — never share / hoist to module scope. */
   compactedThisTurn: boolean
+  /** The current turn carries a `noEvo` message (opening or any message of
+   *  its drained batch, whoever else sent the rest; also set the moment one
+   *  queues into the live turn): its compaction enqueues no evo run. Set per
+   *  turn start (setTurnNoEvo, mirrored into the run ledger so the turn a
+   *  restart resumes keeps it), cleared when the run ends — a manual
+   *  /compact between runs is the user's. */
+  noEvoTurn: boolean
   /** Queue entries a Stop folded while a compact was in flight. selfCompactSession
    *  resets agent.messages (rollback / rebuild) when it unwinds, which would
    *  erase a fold landed mid-run — it lands these right after instead. */
@@ -411,7 +421,7 @@ export interface SessionManagerInternals {
     accessLevel?: 'readonly' | 'workspace' | null,
     title?: string,
   ): Promise<string>
-  runSession(sessionId: string, message: string | ContentBlock[], stamp?: string): Promise<string>
+  runSession(sessionId: string, message: string | ContentBlock[], stamp?: string, noEvo?: boolean): Promise<string>
   querySession(targetSessionId: string, callerSessionId: string, message: string, interrupt?: boolean): Promise<string>
   interruptSession(sessionId: string): void
   /** continue_task tool backend — see drainQueue. */
@@ -816,6 +826,7 @@ export class SessionManager implements SessionManagerInternals {
       isCompacting: false,
       compactAbortController: null,
       compactedThisTurn: false,
+      noEvoTurn: false,
       foldAfterCompact: null,
       systemPrompt,
       thinkingEffort,
@@ -2012,6 +2023,7 @@ export class SessionManager implements SessionManagerInternals {
     sessionId: string,
     message: string | ContentBlock[],
     stamp?: string,
+    noEvo?: boolean,
   ): Promise<string> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
@@ -2021,6 +2033,7 @@ export class SessionManager implements SessionManagerInternals {
     // STRING means "the work is already in messageQueue" (querySession idle
     // path) — skip the opening turn and go straight to drain. `stamp`: the
     // opening message's arrival stamp (its UI row's turn key), if it has one.
+    // `noEvo`: the opening message is a QueuedMessage.noEvo one.
     const hasFirst = typeof message === 'string' ? message !== '' : message.length > 0
     console.debug(`[SessionManager] runSession ${sessionId} (agent: ${session.agentId}, parent: ${session.parentId ?? 'none'}) — hasFirst: ${hasFirst}`)
 
@@ -2035,6 +2048,7 @@ export class SessionManager implements SessionManagerInternals {
         session.interruptRequested = false
         session.resumedAfterInterrupt = false
         session.selfKick = false
+        this.setTurnNoEvo(session, noEvo === true)
         // The opening message as a source-less entry — the shape a channel /
         // relay send has when it is queued instead (sendUserMessage's busy branch).
         lastTurn.batch = [{ text: rawMessageText({ role: 'user', content: message }) }]
@@ -2070,6 +2084,7 @@ export class SessionManager implements SessionManagerInternals {
       // `promise !== null`. Emitting complete first would leave the session
       // still "running" at the moment the client decides whether to close.
       session.promise = null
+      session.noEvoTurn = false
       this.ledgerWrite(deleteRunning, sessionId)
       if (session.parentId === null) {
         this.emitEvent(session.id, { type: 'complete' })
@@ -2104,6 +2119,15 @@ export class SessionManager implements SessionManagerInternals {
     } catch (err) {
       console.warn(`[RunLedger] ledger write failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  /** Per turn start: whether this turn skips pre-compact evo (noEvoTurn).
+   *  Mirrored onto the run's ledger row only when it changes, so the boot
+   *  sweep can resume a marked turn still marked (run-ledger.ts). */
+  private setTurnNoEvo(session: AgentSession, noEvo: boolean): void {
+    if (session.noEvoTurn === noEvo) return
+    session.noEvoTurn = noEvo
+    this.ledgerWrite((ws, id) => setRunningNoEvo(ws, id, noEvo), session.id)
   }
 
   /**
@@ -2247,6 +2271,7 @@ export class SessionManager implements SessionManagerInternals {
       session.interruptRequested = false
       session.toolCallLog = []
       session.warnedToolHashes.clear()
+      this.setTurnNoEvo(session, batch.some((q) => q.noEvo))
       console.debug(`[SessionManager] Draining ${batch.length} queued message(s) for ${session.id} as one merged turn`)
 
       // Open a fresh streaming assistant bubble for this merged turn (root only;
@@ -2781,6 +2806,8 @@ export class SessionManager implements SessionManagerInternals {
    * Returns 'running' | 'queued' to inform the caller.
    * `stamp`: the UI row's arrival stamp (appendUserMessage's return) — the
    * raw turn is stamped with it so deleteExchange can pair the two.
+   * `noEvo`: no person sent it (QueuedMessage.noEvo) — the turn it opens or
+   * merges into skips pre-compact evo.
    */
   async sendUserMessage(
     sessionId: string,
@@ -2788,6 +2815,7 @@ export class SessionManager implements SessionManagerInternals {
     images?: Array<{ data: string; mimeType: string }>,
     accessLevel?: 'readonly' | 'workspace' | null,
     stamp?: string,
+    noEvo?: boolean,
   ): Promise<'running' | 'queued'> {
     const session = await this.ensureSession(sessionId)
 
@@ -2829,7 +2857,10 @@ export class SessionManager implements SessionManagerInternals {
       // the turn resumes after the compact, so request the same soft interrupt
       // as the busy branch below, or the queued message waits for the turn's
       // natural end.
-      session.messageQueue.push({ text: message, images, stamp })
+      session.messageQueue.push({ text: message, images, stamp, noEvo })
+      // Joins a live turn (mid-turn compact): the whole turn is marked, its
+      // part before the merge too. A manual /compact (no run) is the user's.
+      if (noEvo && session.promise !== null) this.setTurnNoEvo(session, true)
       if (session.abortController !== null) session.interruptRequested = true
       console.debug(`[SessionManager] sendUserMessage: ${sessionId} compacting — message queued`)
       return 'queued'
@@ -2840,7 +2871,10 @@ export class SessionManager implements SessionManagerInternals {
       // tool batch, then runAgentTurn's interrupt branch unwinds and runSession's
       // runFn drains the queue. A mid-flight shell is NOT SIGTERM'd (that's the
       // hard interrupt_session path).
-      session.messageQueue.push({ text: message, images, stamp })
+      session.messageQueue.push({ text: message, images, stamp, noEvo })
+      // The running turn is marked at once: its part before the merge (a
+      // separate runAgentTurn the soft interrupt ends) is the same turn.
+      if (noEvo) this.setTurnNoEvo(session, true)
       session.interruptRequested = true
       console.debug(`[SessionManager] sendUserMessage: ${sessionId} busy — message queued, interrupt requested`)
       return 'queued'
@@ -2855,7 +2889,7 @@ export class SessionManager implements SessionManagerInternals {
     // Route through the single runSession loop (runFn runs the opening turn,
     // then drainQueue folds anything that piles up). runSession handles the
     // per-turn reset + lifecycle (promise / complete / release).
-    this.runSession(sessionId, this.buildInput(message, images, session.supportsImage), stamp).catch((err) => {
+    this.runSession(sessionId, this.buildInput(message, images, session.supportsImage), stamp, noEvo).catch((err) => {
       console.error(`[SessionManager] runSession error for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
     })
     return 'running'
@@ -2924,9 +2958,12 @@ export class SessionManager implements SessionManagerInternals {
       || !config.evolution.triggers.preCompact
       || session.parentId
     ) return
-    // A cron run's turn (reply_to `{cron}`) teaches nothing: nobody took part
-    // in it — a stored job prompt and what the run fetched — yet as a full
-    // session it would clear the L2/L3 source gate. /evo on it still works.
+    // A cron run's turn teaches nothing: nobody took part in it — a stored
+    // job prompt and what the run fetched — yet as a full session it would
+    // clear the L2/L3 source gate. /evo on it still works. An awaited run
+    // holds reply_to `{cron}` across all its turns; a delivered fire's prompt
+    // marks the one turn it rides (noEvoTurn), even one a person shares.
+    if (session.noEvoTurn) return
     const owed = readReplyTo(this.db, session.id)
     if (owed && 'cron' in owed) return
     try {
