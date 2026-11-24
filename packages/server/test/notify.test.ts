@@ -83,7 +83,7 @@ describe('auth', () => {
     expect((await notify({ workspace: ws, session: 's1', text: 'hi' }, { remote })).status).toBe(403)
   })
 
-  it.each(['x-forwarded-for', 'forwarded'])('a proxied loopback request (%s): 403', async (header) => {
+  it.each(['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded-host', 'x-forwarded-proto'])('a proxied loopback request (%s): 403', async (header) => {
     expect((await notify({ workspace: ws, session: 's1', text: 'hi' }, { headers: { [header]: '10.0.0.5' } })).status).toBe(403)
   })
 

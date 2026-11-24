@@ -84,8 +84,11 @@ of the two switches the job's mode and clears the other; never pass both.
 `update <id> --run-at <future>` re-arms a one-shot and re-enables it, so a
 run can schedule its own next fire (a relay every N minutes) — no separate
 `enable` needed. If that next fire comes while the run that set it is still
-waiting for its reply, the prompt is delivered into that same turn (not
-skipped), and the reply is pushed once, by the run still waiting.
+waiting for its reply, its prompt is delivered into that run (not skipped);
+the run still waiting then pushes each fire's reply, together in one
+message. Keep the re-arm gap longer than a run takes: fires that keep
+landing in a run that never goes quiet end in its timeout, with nothing
+pushed. (A "run now" click while a run waits is still skipped.)
 
 | Spoken                            | Flag                                      |
 |-----------------------------------|-------------------------------------------|

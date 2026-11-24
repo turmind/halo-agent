@@ -1186,14 +1186,19 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
   // Run-now carries no webhook events: a webhook job without a prompt would
   // open an empty turn.
   if (triggerKind === 'manual' && !job.userPrompt) return skip('nothing to run: the job has no prompt, and run-now carries no webhook events')
-  // The job's own awaited run is still waiting for its reply (tracked; not
-  // finishing, not a legacy orphan): a timer / run-now fire is delivered into
-  // its session instead of skipped — a one-shot that re-armed itself mid-run
-  // would otherwise lose that fire. It leaves the job guard to that run (never
-  // takes nor releases `_inflight`) and its reply to that run. A stateless
-  // job's next fire has its own session (still serialized); a webhook job's
-  // events are injected into the run (startOrInject), its run-now still skipped.
-  const ownAwaited = !job.stateless && !job.webhookSecret && [..._runs.values()].some((r) => r.jobId === jobId)
+  // The job's own awaited run is still waiting for its reply (tracked on this
+  // very session; not finishing, not a legacy orphan): a timer fire is
+  // delivered into it instead of skipped — a one-shot that re-armed itself
+  // mid-run would otherwise lose that fire. It leaves the job guard to that run
+  // (never takes nor releases `_inflight`), and that run pushes this fire's
+  // reply too (the bookkeeping at the send, as injectEvent's). Timer fires
+  // only: a run-now click mid-run is still skipped (no double work from a
+  // double click). A stateless fire's fresh session never matches; a webhook
+  // job has no timer (its events are injected via startOrInject).
+  const ownRun = triggerKind === 'scheduled'
+    ? [..._runs.values()].find((r) => r.jobId === jobId && r.sessionId === sessionId && r.workspacePath === job.workspacePath)
+    : undefined
+  const ownAwaited = ownRun !== undefined
   if (_inflight.has(jobId) && !ownAwaited) return skip('previous run still in progress')
   if (_inflightSessions.has(sessionKeyFor(job.workspacePath, sessionId))) return skip(`session ${sessionId} busy: another cron run is in progress`)
   if (!ownAwaited) _inflight.add(jobId)
@@ -1335,6 +1340,18 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual' 
       const ui = [job.userPrompt, ...texts.map((t) => t.ui)].filter(Boolean).join('\n\n')
       const model = [UNATTENDED_PREAMBLE, job.userPrompt, ...texts.map((t) => t.model)].filter(Boolean).join('\n\n')
       if (deliver) {
+        // Into the job's own awaited run: its replies so far are kept for its
+        // push, as for an injected webhook event — an idle root's last reply
+        // now (this prompt opens a new turn, which resets it), a running
+        // turn's at the next drained batch (`injected`, the queued_message
+        // handler in trackRun).
+        if (ownRun) {
+          if (ownRun.idleFinal) {
+            ownRun.answers.push(ownRun.idleFinal)
+            ownRun.idleFinal = ''
+          }
+          ownRun.injected++
+        }
         // The shared "put it in, don't wait" primitive (halo notify uses it
         // too): no pointer, turn marked noEvo. Never a webhook fire: no events.
         sendState = await host.deliverMessage(sessionId, ui, model)

@@ -810,7 +810,7 @@ export const zh: Record<string, string> = {
   'cron.form.timezone.hostDefault': '默认 — 主机时区（{tz}）',
   'cron.form.timeoutSec': '最长运行时间（秒）',
   'cron.form.timeoutSec.placeholder': '3600（默认）',
-  'cron.form.timeoutSec.hint': '运行超过该时长会被强制终止。留空 = 默认 3600 秒。范围 60–21600。',
+  'cron.form.timeoutSec.hint': '运行超过该时长会被强制终止。留空 = 默认 3600 秒。范围 60–21600。投递式触发（无推送目标或会话忙）没有超时。',
   'cron.form.activeFrom': '生效起（可选）',
   'cron.form.activeUntil': '生效止（可选）',
   'cron.form.activeClear': '清空',

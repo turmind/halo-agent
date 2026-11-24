@@ -2338,6 +2338,12 @@ export class SessionManager implements SessionManagerInternals {
         const deterministicFail = session.turnErrorKind === 'refusal' || session.turnErrorKind === 'account'
         if (session.selfKick && !session.interruptRequested && !deterministicFail) {
           const kickStamp = nextTurnStamp()
+          // The kick carries no noEvo, even when the interrupting message was a
+          // delivered one (cron fire / halo notify): its turn's compaction may
+          // enqueue pre-compact evo. Accepted — it resumes the task that was
+          // cut into, usually a person's; an awaited cron run stays gated by
+          // its `{cron}` pointer; and any draft still faces review / the
+          // auto-apply gates.
           session.messageQueue.push({ text: CONTINUE_TASK_KICK, stamp: kickStamp })
           // The kick is a raw user turn, so it needs a UI user row too — otherwise
           // deleteExchange's UI span and deleteRawTurn's raw span diverge (the UI

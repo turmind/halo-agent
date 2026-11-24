@@ -29,6 +29,8 @@ export interface NotifyRegistry {
   getOrCreate(workspacePath: string): Pick<SessionManager, 'getDb' | 'deliverMessage'>
 }
 
+const PROXY_HEADERS = ['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded-host', 'x-forwarded-proto']
+
 /** 127.0.0.0/8, ::1, and their IPv4-mapped form. */
 function isLoopback(addr: string | undefined): boolean {
   if (!addr) return false
@@ -49,7 +51,9 @@ export function createNotifyRoutes(opts: { registry: NotifyRegistry }): Hono {
   app.post(NOTIFY_PATH.replace(/^\/api/, ''), bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'request too large' }, 413) }), async (c) => {
     const token = localNotifyToken()
     if (!token) return c.json({ error: 'notify is not available on this server' }, 404)
-    if (!isLoopback(getConnInfo(c).remote.address) || c.req.header('x-forwarded-for') || c.req.header('forwarded')) {
+    // The token file (0600) is the boundary; the proxy headers only stop the
+    // common case of a same-host reverse proxy relaying remote callers.
+    if (!isLoopback(getConnInfo(c).remote.address) || PROXY_HEADERS.some((h) => c.req.header(h) !== undefined)) {
       return c.json({ error: 'notify accepts local callers only' }, 403)
     }
     if (!tokenMatches(c.req.header('authorization'), token)) return c.json({ error: 'unauthorized' }, 401)

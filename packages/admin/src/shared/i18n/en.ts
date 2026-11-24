@@ -810,7 +810,7 @@ export const en: Record<string, string> = {
   'cron.form.timezone.hostDefault': 'Default — host TZ ({tz})',
   'cron.form.timeoutSec': 'Max run time (seconds)',
   'cron.form.timeoutSec.placeholder': '3600 (default)',
-  'cron.form.timeoutSec.hint': 'Kill the run if it exceeds this. Empty = default 3600s. Range 60–21600.',
+  'cron.form.timeoutSec.hint': 'Kill the run if it exceeds this. Empty = default 3600s. Range 60–21600. A delivered fire (no targets, or the session busy) has no timeout.',
   'cron.form.activeFrom': 'Active from (optional)',
   'cron.form.activeUntil': 'Active until (optional)',
   'cron.form.activeClear': 'Clear',

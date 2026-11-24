@@ -250,7 +250,7 @@ describe('in-process cron run — happy path', () => {
 })
 
 describe('in-process cron run — guards', () => {
-  it('same job mid-run (its awaited run waiting for the reply) → delivered into that run\'s turn; the reply and the job guard stay that run\'s', async () => {
+  it('a timer fire while the job\'s awaited run waits for its reply → delivered into that run; both fires\' replies pushed by it, the job guard stays its', async () => {
     let open!: () => void
     h.turns.push({ reply: 'first reply', gate: new Promise<void>((r) => { open = r }) }, { reply: 'merged reply' })
     insertJob('cron-o')
@@ -265,18 +265,61 @@ describe('in-process cron run — guards', () => {
     open()
     await settled(first)
     expect(h.inputs[1]).toContain('daily report')
-    expect(getRun(first)).toMatchObject({ status: 'succeeded', output: 'merged reply' })
-    expect(sent).toEqual([{ accountId: 'acc1', text: 'merged reply' }])
+    expect(getRun(first)).toMatchObject({ status: 'succeeded', output: 'first reply\n\nmerged reply' })
+    expect(sent).toEqual([{ accountId: 'acc1', text: 'first reply\n\nmerged reply' }])
     expect(_inflight.has('cron-o')).toBe(false)
   })
 
-  it.each([['stateless', { stateless: 1 }], ['webhook', { schedule: '', webhookSecret: 'hook-secret' }]] as const)('a %s job mid-run → still skipped "previous run still in progress"', async (_kind, fields) => {
+  it('a timer fire while the awaited run\'s root is idle (waiting on a sub-agent): the reply it had given is pushed with the next', async () => {
+    insertJob('cron-idle')
+    h.seedSession('cron-idle')
+    // A running child holds the run open after each turn (deliverRelayReport's quiet gate).
+    h.sm.getDb().insert(agentSessions).values({ id: 'cron-idle>kid', parentId: 'cron-idle', agentId: 'default', agentName: 'kid', description: '', createdAt: 1000, updatedAt: 1000 }).run()
+    h.turns.push({ reply: 'part one' }, { reply: 'part two' })
+    const first = await runJob('cron-idle', 'manual')
+    await until(() => h.inputs.length === 1 && !h.sm.hasActiveWorkInTree('cron-idle'))
+    expect(getRun(first).status).toBe('running')
+    h.sm.getDb().update(agentSessions).set({ stoppedAt: Date.now() }).where(eq(agentSessions.id, 'cron-idle>kid')).run()
+    const second = getRun(await runJob('cron-idle', 'scheduled'))
+    expect(second).toMatchObject({ status: 'succeeded', output: `delivered into session cron-idle (new turn; not awaited; reply goes to cron run ${first})` })
+    await settled(first)
+    expect(getRun(first)).toMatchObject({ status: 'succeeded', output: 'part one\n\npart two' })
+    expect(sent).toEqual([{ accountId: 'acc1', text: 'part one\n\npart two' }])
+  })
+
+  it('a run-now click while the job\'s awaited run waits → skipped "previous run still in progress" (no double work)', async () => {
     let open!: () => void
     h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
-    insertJob('cron-sl', fields)
+    insertJob('cron-click', { schedule: '', runAt: Date.now() })
+    const first = await runJob('cron-click', 'scheduled')
+    await until(() => h.inputs.length === 1)
+    expect(getRun(await runJob('cron-click', 'manual'))).toMatchObject({ status: 'skipped', failureReason: 'previous run still in progress' })
+    open()
+    await settled(first)
+    expect(h.inputs).toHaveLength(1)
+  })
+
+  it('a timer fire after the job was re-pointed to another session mid-run → skipped: the awaited run is not on the fire\'s session', async () => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    h.seedSession('elsewhere')
+    insertJob('cron-moved')
+    const first = await runJob('cron-moved', 'manual')
+    await until(() => h.inputs.length === 1)
+    db.update(cronJobs).set({ sessionId: 'elsewhere' }).where(eq(cronJobs.id, 'cron-moved')).run()
+    expect(getRun(await runJob('cron-moved', 'scheduled'))).toMatchObject({ status: 'skipped', failureReason: 'previous run still in progress' })
+    open()
+    await settled(first)
+    expect(h.inputs).toHaveLength(1)
+  })
+
+  it('a stateless job\'s timer fire mid-run → still skipped "previous run still in progress" (its fresh session is not the run\'s)', async () => {
+    let open!: () => void
+    h.turns.push({ gate: new Promise<void>((r) => { open = r }) })
+    insertJob('cron-sl', { stateless: 1 })
     const first = await runJob('cron-sl', 'manual')
     await until(() => h.inputs.length === 1)
-    const second = getRun(await runJob('cron-sl', 'manual'))
+    const second = getRun(await runJob('cron-sl', 'scheduled'))
     expect(second).toMatchObject({ status: 'skipped', failureReason: 'previous run still in progress', logPath: null })
     open()
     await settled(first)
@@ -285,7 +328,7 @@ describe('in-process cron run — guards', () => {
 
   it('a pushed one-shot that re-arms itself while awaited: the fire at the new runAt is delivered into the same turn, the job stays enabled', async () => {
     let open!: () => void
-    h.turns.push({ reply: 'wrap-up', gate: new Promise<void>((r) => { open = r }) })
+    h.turns.push({ reply: 'wrap-up', gate: new Promise<void>((r) => { open = r }) }, { reply: 'second fire done' })
     insertJob('cron-rearm', { schedule: '', runAt: Date.now() })
     const first = await runJob('cron-rearm', 'scheduled')
     await until(() => h.inputs.length === 1)
@@ -303,7 +346,7 @@ describe('in-process cron run — guards', () => {
     open()
     await settled(first)
     expect(getRun(first).status).toBe('succeeded')
-    expect(sent.map((m) => m.text)).toEqual([expect.any(String)])
+    expect(sent).toEqual([{ accountId: 'acc1', text: 'wrap-up\n\nsecond fire done' }])
     expect(getJob('cron-rearm').enabled).toBe(1)
   })
 
