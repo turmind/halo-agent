@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-11-24
+
+- Cron: a fire with no push targets, or one that finds its session busy, is delivered into the session and the run ends — no waiting, no timeout, no stop; the reply goes to whoever owns the turn. Only a fire with targets on a free session still waits and pushes. Delivered turns skip pre-compact evo.
+- Cron: a one-shot job is disabled only when its `runAt` has passed; setting a future `runAt` (PUT / manage-cron update) re-enables it, so a job that re-arms itself mid-run keeps firing. A timer fire during the job's own awaited run is merged into it and every merged reply is pushed; run-now mid-run is still skipped.
+- New `halo notify [--workspace] [--session] "<text>"`: a script on this machine wakes a session with a `[Script notice]` message (loopback + per-boot token in `~/.halo/secrets/notify.json`). Full-access `shell_exec` gets `HALO_WORKSPACE` / `HALO_SESSION_ID`, so a background job the agent starts can report back without flags.
+- Cron: changing a job's folder while its session is busy no longer moves the running session.
+
 ## [2.4.0] - 2026-11-23
 
 - Extensions: a manifest `canvas` block adds a file-less Canvas tab, and an extension backend can raise notices in Admin (open the Canvas, confirm / cancel); full-access sessions whose agent enables a confirmed extension's skill get `HALO_EXT_BACKENDS` / `HALO_EXT_NODE` in `shell_exec`, so the agent can drive that backend. Ships with the new halo-hub `browser` 1.0.0 (co-browsing on the server; needs 2.4.0).
@@ -1341,7 +1348,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.4.1...HEAD
+[2.4.1]: https://github.com/turmind/halo-agent/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/turmind/halo-agent/compare/v2.3.6...v2.4.0
 [2.3.6]: https://github.com/turmind/halo-agent/compare/v2.3.5...v2.3.6
 [2.3.5]: https://github.com/turmind/halo-agent/compare/v2.3.4...v2.3.5
