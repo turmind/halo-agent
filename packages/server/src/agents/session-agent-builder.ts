@@ -18,7 +18,7 @@ import { buildA2ATools } from '../a2a/outbound.js'
 import { buildNodeTools } from '../nodes/tools.js'
 import { sessionPrefix } from '../channels/shared/session-prefix.js'
 import { extensionSessionAccess } from '../extensions/session-access.js'
-import { localNotifyToken, localNotifySessionToken, localNotifyUrl } from '../local-notify.js'
+import { localNotifyToken, localNotifyWorkspaceToken, localNotifyUrl } from '../local-notify.js'
 import { NOTIFY_SESSION_ENV, NOTIFY_WORKSPACE_ENV, NOTIFY_TOKEN_ENV, NOTIFY_URL_ENV } from '@turmind/halo-core/protocol'
 
 /** The A2A channel's session-id stem (`a2a_<accountId>_…`, routes.ts). */
@@ -201,7 +201,7 @@ export class SessionAgentBuilder {
     // No token outside a full server boot (CLI/TUI loop, AgentCore): no env, no hint.
     const full = accessLevel === null
     const notifyEnv = localNotifyToken() !== null
-    const scopedToken = notifyEnv && !full ? localNotifySessionToken(this.host.workspaceRoot, sessionId) : null
+    const scopedToken = notifyEnv && !full ? localNotifyWorkspaceToken(this.host.workspaceRoot) : null
     const allTools = createWorkspaceTools(this.host.workspaceRoot, {
       accessLevel: accessLevel ?? 'full',
       allowedNamespaces,
@@ -209,7 +209,7 @@ export class SessionAgentBuilder {
       shellContext: async () => {
         const context = full ? await extensionSessionAccess.shellContext(this.host.workspaceRoot, sessionId) : { env: {}, secrets: [] }
         if (!notifyEnv) return context
-        // Non-full shells cannot read notify.json: give only this session's
+        // Non-full shells cannot read notify.json: give only this workspace's
         // HMAC, never the boot token or extension credentials.
         // A boot-recovered session may be built before the listener is ready.
         const url = localNotifyUrl()

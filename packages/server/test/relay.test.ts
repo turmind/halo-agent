@@ -238,6 +238,11 @@ describe('relay_send', () => {
     return buildRelayTools(callerStub, 'sec-1').find((t) => t.name === 'relay_send')!
   }
 
+  it('describes root dispatch across workspaces or outside the own tree, and points in-tree callers to query_session', () => {
+    expect(relaySend().description).toContain('Dispatch a message to a root session on this server — in another workspace, or outside your own tree in this workspace. For sessions in your own tree, use query_session.')
+    expect(relaySend().description).not.toContain('ANOTHER workspace')
+  })
+
   it('creates the target session, stamps reply_to, and channel-prefixes the model text', async () => {
     const sendSpy = vi.spyOn(deptSm, 'sendUserMessage').mockResolvedValue('running')
     const appendSpy = vi.spyOn(deptSm, 'appendUserMessage')

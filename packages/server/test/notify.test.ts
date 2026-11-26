@@ -9,7 +9,7 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { NOTIFY_MAX_TEXT_BYTES } from '@turmind/halo-core/protocol'
 import { createNotifyRoutes } from '../src/routes/notify.js'
-import { _setLocalNotifyToken, localNotifySessionToken } from '../src/local-notify.js'
+import { _setLocalNotifyToken, localNotifyWorkspaceToken } from '../src/local-notify.js'
 import { createEvoDb, setEvoDb, evolutionRuns, type EvoDb } from '../src/db/evo-db.js'
 import { agentSessions } from '../src/db/schema.js'
 import { getSandboxBackend, initBwrapCheck, sandboxExec, buildSeatbeltProfile } from '../src/tools/sandbox.js'
@@ -87,42 +87,49 @@ describe('auth', () => {
     expect(h.inputs).toEqual([])
   })
 
-  it('session tokens are the specified hex HMAC, normalized by realpath', async () => {
+  it('workspace tokens are the specified hex HMAC, normalized by realpath', async () => {
     const alias = path.join(tmpHome, 'alias')
     fs.symlinkSync(ws, alias)
-    const token = localNotifySessionToken(alias, 's1')!
-    expect(token).toBe(crypto.createHmac('sha256', TOKEN).update(`${ws}\0s1`).digest('hex'))
+    const token = localNotifyWorkspaceToken(alias)!
+    expect(token).toBe(crypto.createHmac('sha256', TOKEN).update(ws).digest('hex'))
     expect((await notify({ workspace: alias, session: 's1', text: 'self' }, { token })).status).toBe(200)
     await until(() => h.inputs.length === 1 && !sessions().has('s1'))
     expect(h.inputs[0]).toContain('[Script notice] self')
   })
 
-  it.each(['session', 'workspace'])('a verified session token cannot change its %s; boot token can', async (changed) => {
+  it.each([undefined, { session: 's1' }])('a workspace token wakes another full session, with or without legacy source.session: %j', async (legacy) => {
     h.seedSession('s2')
+    const body = { workspace: ws, session: 's2', text: 'hi', source: { workspace: ws, ...legacy } }
+    expect((await notify(body, { token: localNotifyWorkspaceToken(ws)! })).status).toBe(200)
+    await until(() => h.inputs.length === 1 && !sessions().has('s2'))
+    expect(h.inputs[0]).toContain('[Script notice] hi')
+  })
+
+  it('a verified workspace token cannot change workspace; boot token can', async () => {
     const otherWs = path.join(tmpHome, 'other')
     fs.mkdirSync(path.join(otherWs, '.halo'), { recursive: true })
     fs.writeFileSync(path.join(otherWs, '.halo', 'halo.db'), '')
-    const source = { workspace: ws, session: 's1' }
-    const body = { workspace: changed === 'workspace' ? otherWs : ws, session: changed === 'workspace' ? 's1' : 's2', text: 'hi', source }
-    const res = await notify(body, { token: localNotifySessionToken(ws, 's1')! })
+    const body = { workspace: otherWs, session: 's1', text: 'hi', source: { workspace: ws } }
+    const res = await notify(body, { token: localNotifyWorkspaceToken(ws)! })
     expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ error: 'this token can only wake its own session' })
+    expect(await res.json()).toEqual({ error: 'this token can only wake sessions in its own workspace' })
     expect(h.inputs).toEqual([])
     expect((await notify(body)).status).toBe(200)
+    await until(() => h.inputs.length === 1 && !sessions().has('s1'))
   })
 
   it('wrong hex, changed source, or a stale token: 401 (no token identity is guessed)', async () => {
     const source = { workspace: ws, session: 's1' }
-    const token = localNotifySessionToken(ws, 's1')!
+    const token = localNotifyWorkspaceToken(ws)!
     expect((await notify({ ...source, text: 'hi', source }, { token: '0'.repeat(64) })).status).toBe(401)
-    expect((await notify({ ...source, text: 'hi', source: { ...source, session: 's2' } }, { token })).status).toBe(401)
+    expect((await notify({ ...source, text: 'hi', source: { workspace: tmpHome } }, { token })).status).toBe(401)
     _setLocalNotifyToken('next-boot')
     expect((await notify({ ...source, text: 'hi' }, { token })).status).toBe(401)
     expect(h.inputs).toEqual([])
   })
 
-  it('session tokens also require loopback and no proxy headers', async () => {
-    const token = localNotifySessionToken(ws, 's1')!
+  it('workspace tokens also require loopback and no proxy headers', async () => {
+    const token = localNotifyWorkspaceToken(ws)!
     const body = { workspace: ws, session: 's1', text: 'hi' }
     expect((await notify(body, { token, remote: '10.0.0.1' })).status).toBe(403)
     expect((await notify(body, { token, headers: { forwarded: 'for=127.0.0.1' } })).status).toBe(403)
@@ -289,13 +296,18 @@ describe('shell_exec env + hint', () => {
     const output = await shell.callback({ command: 'env' })
     expect(output).toContain('HALO_NOTIFY_URL=http://127.0.0.1:1')
     expect(output).toContain('HALO_NOTIFY_TOKEN=***')
-    expect(output).not.toContain(localNotifySessionToken(ws, 'p1>c1'))
+    expect(output).not.toContain(localNotifyWorkspaceToken(ws))
     expect(issue).not.toHaveBeenCalled()
-    const token = localNotifySessionToken(ws, 'p1>c1')!
+    const token = localNotifyWorkspaceToken(ws)!
     const env = { HALO_WORKSPACE: ws, HALO_SESSION_ID: 'p1>c1', HALO_NOTIFY_URL: 'http://127.0.0.1:1', HALO_NOTIFY_TOKEN: token, HALO_EXT_BACKENDS: 'no', HALO_EXT_NODE: 'no', EXTRA: 'no' }
     const raw = await sandboxExec('env', { workspaceRoot: ws, accessLevel, env })
     for (const key of ['HALO_WORKSPACE', 'HALO_SESSION_ID', 'HALO_NOTIFY_URL', 'HALO_NOTIFY_TOKEN'] as const) expect(raw.stdout).toContain(`${key}=${env[key]}`)
     expect(raw.stdout).not.toMatch(/HALO_EXT_|EXTRA=/)
+    const digestCommand = `node -e 'process.stdout.write(require("node:crypto").createHash("sha256").update(process.env.HALO_NOTIFY_TOKEN).digest("hex"))'`
+    const expectedDigest = crypto.createHash('sha256').update(token).digest('hex')
+    for (const id of ['p1>c1', 'another-root']) {
+      expect(await shellOf(id, accessLevel).callback({ command: digestCommand })).toBe(expectedDigest)
+    }
   })
 
   it.each(['full', 'workspace', 'readonly'] as const)('%s: exact notify paragraph', (accessLevel) => {
@@ -311,7 +323,7 @@ describe('shell_exec env + hint', () => {
     ].join('\n'))
   })
 
-  it.skipIf(!bwrap).each(['workspace', 'readonly'] as const)('%s: real CLI + bwrap recipe wakes itself over HTTP, other session refused', async (accessLevel) => {
+  it.skipIf(!bwrap).each(['workspace', 'readonly'] as const)('%s: real CLI + bwrap wakes same-workspace sessions over HTTP, other workspace refused', async (accessLevel) => {
     const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 })
     await new Promise<void>((r) => server.once('listening', r))
     _setLocalNotifyToken(TOKEN, `http://127.0.0.1:${(server.address() as { port: number }).port}`)
@@ -330,8 +342,11 @@ describe('shell_exec env + hint', () => {
       await until(() => h.inputs.length === 1 && !sessions().has('s1'), 15_000)
       expect(h.inputs[0]).toContain('[Script notice] job done: 0')
       expect(fs.existsSync(path.join(ws, '.halo', 'tmp', 'job.log'))).toBe(accessLevel === 'workspace')
-      expect(await shell.callback({ command: `"${bin}/halo" notify -s s2 wrong` })).toContain('this token can only wake its own session')
-      expect(h.inputs).toHaveLength(1)
+      expect(await shell.callback({ command: `"${bin}/halo" notify -s s2 "same workspace"` })).toBe('(no output)')
+      await until(() => h.inputs.length === 2 && !sessions().has('s2'))
+      expect(h.inputs[1]).toContain('[Script notice] same workspace')
+      expect(await shell.callback({ command: `"${bin}/halo" notify -w "${tmpHome}" -s s2 wrong` })).toContain('this token can only wake sessions in its own workspace')
+      expect(h.inputs).toHaveLength(2)
     } finally {
       await new Promise<void>((r, reject) => server.close((err) => err ? reject(err) : r()))
     }

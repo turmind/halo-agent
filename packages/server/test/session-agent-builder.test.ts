@@ -239,6 +239,11 @@ describe('delegation — by-id session tools are scoped to the caller\'s own tre
     return tool
   }
 
+  it('query_session describes the whole own tree and directs tree-external messages to relay_send', () => {
+    const sm = new SessionManager(ws)
+    expect(toolByName(sm, 'root>child', 'query_session').description).toContain('Send a message to another session in your own tree (same root id, including parents, children and siblings). For sessions outside your tree, use relay_send.')
+  })
+
   it('refuses cross-tree stop/archive/query/get_output without touching the target', async () => {
     const sm = new SessionManager(ws)
     // Caller lives on root A; victim is an unrelated root B with a child.

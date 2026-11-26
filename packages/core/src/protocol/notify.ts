@@ -23,6 +23,6 @@ export interface NotifyRequest {
   workspace: string
   session: string
   text: string
-  /** Original env target, HMAC-verified before distinguishing out-of-scope (403) from invalid (401). */
-  source?: { workspace: string; session: string }
+  /** Original env workspace, HMAC-verified before distinguishing out-of-scope (403) from invalid (401). */
+  source?: { workspace: string }
 }

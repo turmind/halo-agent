@@ -4,7 +4,7 @@
  * Auth: loopback peers only (not proxied — a local reverse proxy makes every
  * caller look loopback), plus `Authorization: Bearer <token>` matching the
  * per-boot token in `~/.halo/secrets/notify.json` (any workspace/session), or
- * a session HMAC (only its own target). Outside the admin cookie (PUBLIC_PATHS).
+ * a workspace HMAC (any session in that workspace). Outside the admin cookie (PUBLIC_PATHS).
  * The CLI's optional `source` identifies an HMAC for 403 vs 401; never trusted
  * until authenticated (local-notify.ts).
  *
@@ -22,7 +22,7 @@ import { getConnInfo } from '@hono/node-server/conninfo'
 import { eq } from 'drizzle-orm'
 import { NOTIFY_LABEL, NOTIFY_MAX_TEXT_BYTES, NOTIFY_PATH, type NotifyRequest } from '@turmind/halo-core/protocol'
 import { agentSessions } from '../db/schema.js'
-import { localNotifyToken, localNotifySessionToken } from '../local-notify.js'
+import { localNotifyToken, localNotifyWorkspaceToken } from '../local-notify.js'
 import { isShuttingDown } from '../shutdown.js'
 import type { SessionManager } from '../agents/session-manager.js'
 
@@ -68,19 +68,19 @@ export function createNotifyRoutes(opts: { registry: NotifyRegistry }): Hono {
       return c.json({ error: 'workspace, session and text are required' }, 400)
     }
     if (!full) {
-      // HMACs carry no identity. The CLI supplies the original env target so
+      // HMACs carry no identity. The CLI supplies the original env workspace so
       // a valid but out-of-scope credential can be distinguished from junk,
-      // without a token table or scanning every workspace/session.
-      const source = body?.source ?? { workspace, session }
-      if (typeof source.workspace !== 'string' || !source.workspace || typeof source.session !== 'string' || !source.session) {
+      // without a token table or scanning every workspace.
+      const source = body?.source ?? { workspace }
+      if (typeof source.workspace !== 'string' || !source.workspace) {
         return c.json({ error: 'unauthorized' }, 401)
       }
       let expected: string | null = null
-      try { expected = localNotifySessionToken(source.workspace, source.session) } catch { /* Unknown identity is not authenticated. */ }
+      try { expected = localNotifyWorkspaceToken(source.workspace) } catch { /* Unknown identity is not authenticated. */ }
       if (!expected || !tokenMatches(authorization, expected)) return c.json({ error: 'unauthorized' }, 401)
       let target: string | null = null
-      try { target = localNotifySessionToken(workspace, session) } catch { /* No such target is outside this credential's scope. */ }
-      if (!target || !tokenMatches(authorization, target)) return c.json({ error: 'this token can only wake its own session' }, 403)
+      try { target = localNotifyWorkspaceToken(workspace) } catch { /* No such target is outside this credential's scope. */ }
+      if (!target || !tokenMatches(authorization, target)) return c.json({ error: 'this token can only wake sessions in its own workspace' }, 403)
     }
     const bytes = Buffer.byteLength(text)
     if (bytes > NOTIFY_MAX_TEXT_BYTES) return c.json({ error: `text is ${bytes} bytes; the limit is ${NOTIFY_MAX_TEXT_BYTES}` }, 413)

@@ -30,7 +30,7 @@ background ("tell me when the build finishes").
 
 Inside a server session's shell_exec both variables are set, so
 \`halo notify "build done"\` needs no flags. Text: up to ${NOTIFY_MAX_TEXT_BYTES} bytes (UTF-8).
-Workspace/readonly sessions can only wake themselves, using $${NOTIFY_TOKEN_ENV}
+Workspace/readonly sessions can wake any session in their workspace, using $${NOTIFY_TOKEN_ENV}
 and $${NOTIFY_URL_ENV}. Otherwise reads ~/.halo/secrets/${NOTIFY_TOKEN_FILE}
 (the server running as this OS user writes it at boot); local calls only.
 
@@ -75,10 +75,10 @@ export async function cmdNotify(argv: string[]): Promise<number> {
   }
 
   const body: NotifyRequest = { workspace: path.resolve(workspace), session, text }
-  // A bare HMAC has no identity: carry its original target so the server can
-  // authenticate it before returning 403 for explicit -w/-s overrides.
-  if (fromEnv && process.env[NOTIFY_WORKSPACE_ENV] && process.env[NOTIFY_SESSION_ENV]) {
-    body.source = { workspace: path.resolve(process.env[NOTIFY_WORKSPACE_ENV]!), session: process.env[NOTIFY_SESSION_ENV]! }
+  // A bare HMAC has no identity: carry its original workspace so the server
+  // can authenticate it before returning 403 for an explicit -w override.
+  if (fromEnv && process.env[NOTIFY_WORKSPACE_ENV]) {
+    body.source = { workspace: path.resolve(process.env[NOTIFY_WORKSPACE_ENV]!) }
   }
   let res: Response
   try {

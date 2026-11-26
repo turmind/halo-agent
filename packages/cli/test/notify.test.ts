@@ -81,7 +81,12 @@ describe('halo notify', () => {
     if (file === 'malformed') fs.writeFileSync(tokenFile(), '{')
     const env = { HALO_WORKSPACE: '/own', HALO_SESSION_ID: 'own', HALO_NOTIFY_URL: url, HALO_NOTIFY_TOKEN: 'session-token' }
     expect(await runHalo(['-w', '/other', '-s', 'other', 'hi'], env)).toEqual({ code: 0, stderr: '' })
-    expect(seen).toEqual([{ auth: 'Bearer session-token', body: { workspace: '/other', session: 'other', text: 'hi', source: { workspace: '/own', session: 'own' } } }])
+    expect(seen).toEqual([{ auth: 'Bearer session-token', body: { workspace: '/other', session: 'other', text: 'hi', source: { workspace: '/own' } } }])
+  })
+
+  it('env auth sends source.workspace even without HALO_SESSION_ID when -s is explicit', async () => {
+    expect(await runHalo(['-s', 'other', 'hi'], { HALO_WORKSPACE: '/own', HALO_NOTIFY_URL: url, HALO_NOTIFY_TOKEN: 'workspace-token' })).toEqual({ code: 0, stderr: '' })
+    expect(seen[0]).toEqual({ auth: 'Bearer workspace-token', body: { workspace: '/own', session: 'other', text: 'hi', source: { workspace: '/own' } } })
   })
 
   it.each(['HALO_NOTIFY_URL', 'HALO_NOTIFY_TOKEN'])('only %s is set: still reads the token file', async (key) => {
@@ -129,7 +134,7 @@ describe('halo notify', () => {
     expect(r.stderr).toContain('authentication failed')
   })
 
-  it.each([[403, 'this token can only wake its own session'], [404, 'session not found: s1'], [413, 'text is 9000 bytes; the limit is 8192'], [503, 'server is shutting down']])('%i: the server\'s reason, exit 1', async (status, error) => {
+  it.each([[403, 'this token can only wake sessions in its own workspace'], [404, 'session not found: s1'], [413, 'text is 9000 bytes; the limit is 8192'], [503, 'server is shutting down']])('%i: the server\'s reason, exit 1', async (status, error) => {
     writeToken()
     reply = { status, body: { error } }
     const r = await runHalo(['-w', '/w', '-s', 's1', 'hi'])

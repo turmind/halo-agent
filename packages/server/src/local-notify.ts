@@ -6,8 +6,8 @@
  * `~/.halo/secrets/notify.json` (0600); the CLI reads that file and calls
  * `POST /api/notify` on loopback. A new token every boot — nothing to revoke;
  * a stale file left by a dead server only meets a closed port or a 401.
- * Workspace/readonly shells receive an HMAC bound to their workspace and
- * session instead of the boot token. Never the admin password; non-loopback
+ * Workspace/readonly shells receive an HMAC bound to their workspace
+ * instead of the boot token. Never the admin password; non-loopback
  * peers are refused for both credentials.
  *
  * Server only: CLI / TUI / AgentCore never call initLocalNotify, so their
@@ -28,9 +28,9 @@ export function localNotifyUrl(): string | null {
 }
 
 /** Both issuance and target resolution use the workspace's real path. No token table. */
-export function localNotifySessionToken(workspacePath: string, sessionId: string): string | null {
+export function localNotifyWorkspaceToken(workspacePath: string): string | null {
   if (!token) return null
-  return crypto.createHmac('sha256', token).update(`${fs.realpathSync(workspacePath)}\0${sessionId}`).digest('hex')
+  return crypto.createHmac('sha256', token).update(fs.realpathSync(workspacePath)).digest('hex')
 }
 
 /** Boot (index.ts), before any session is built: the shell_exec env and

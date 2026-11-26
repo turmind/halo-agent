@@ -179,7 +179,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
 
   const querySessionTool: ToolDef = {
     name: 'query_session',
-    description: 'Send a message to another session. If the target is idle it processes immediately; if busy the message is queued. The reply is delivered asynchronously to your conversation. Returns JSON with code 0 on success.',
+    description: 'Send a message to another session in your own tree (same root id, including parents, children and siblings). For sessions outside your tree, use relay_send. If the target is idle it processes immediately; if busy the message is queued. The reply is delivered asynchronously to your conversation. Returns JSON with code 0 on success.',
     inputSchema: {
       type: 'object' as const,
       properties: {
