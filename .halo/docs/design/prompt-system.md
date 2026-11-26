@@ -110,7 +110,7 @@ Startup seeds `templates/prompts/{bootstrap,all,root}/` into `~/.halo/global/pro
 
 `RUNTIME.md`'s **Boundaries** list names what is data, never instructions: tool results; an `[A2A report · …]` / `[A2A interim report · …]` (a remote agent's output); a `[Script notice] …` (a local script's `halo notify` — the agent judges for itself what, if anything, to do about it).
 
-The `shell_exec` tool description (code in `workspace-tools.ts`, not a prompt template) teaches server sessions to finish relevant background jobs with `halo notify`: full / workspace use a log recipe; readonly discards output and returns the exit code. Non-full credentials wake only the issuing session. No boot token (CLI / TUI / AgentCore) or Windows keeps the original polling paragraph; credentials never enter the description. See [tools.md](../dev/tools.md#shell_exec).
+The `shell_exec` tool description (code in `workspace-tools.ts`, not a prompt template) teaches server sessions to finish relevant background jobs with `halo notify`: full / workspace use a log recipe; readonly discards output and returns the exit code. Non-full credentials can wake any session in their workspace (including full), not sessions in other workspaces; no flags still targets the issuing session. No boot token (CLI / TUI / AgentCore) or Windows keeps the original polling paragraph; credentials never enter the description. See [tools.md](../dev/tools.md#shell_exec).
 
 ### Live load (every `buildAgentInstance`)
 `loadSystemPrompts(workspaceRoot?)` resolves each scope directory with workspace > global precedence:
