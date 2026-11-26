@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-11-26
+
+- `halo notify` from a workspace / readonly session can now wake any session in its own workspace (was: only itself); other workspaces are still refused. Full sessions are unchanged.
+- `query_session` / `relay_send` descriptions say which to use: `query_session` for sessions in your own tree, `relay_send` for any root session outside it (another workspace, or outside your tree in this one).
+- Docs: `halo notify` patterns — event-driven monitoring (a script notifies only on events, a low-frequency cron restarts it after a server restart) and agent-to-agent notices that don't take over a session's reply owner.
+
 ## [2.4.2] - 2026-11-24
 
 - shell_exec: when `halo notify` is available, its description teaches a background recipe (`nohup sh -c '<cmd> > log; halo notify "done: $?"' >/dev/null 2>&1 &`) for jobs whose end matters, instead of polling with follow-up calls (polling kept the session busy). Not shown on Windows yet.
@@ -1354,7 +1360,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.4.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v2.4.3...HEAD
+[2.4.3]: https://github.com/turmind/halo-agent/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/turmind/halo-agent/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/turmind/halo-agent/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/turmind/halo-agent/compare/v2.3.6...v2.4.0
